@@ -112,3 +112,16 @@ def test_bundled_material_database():
     assert float(cfrp.find("physicalproperties/DENS").get("value")) == pytest.approx(1550)
     assert all(n.endswith("(generic)") for n in names)
     assert len(names) >= 8
+
+
+def test_distances_for_picking_sketch_segments():
+    assert shapes.dist_to_line((5, 3), (0, 0), (10, 0)) == pytest.approx(3)
+    assert shapes.dist_to_line((-4, 3), (0, 0), (10, 0)) == pytest.approx(5)  # beyond the end point
+    assert shapes.dist_to_arc((0, 6), (0, 0), 5) == pytest.approx(1)  # full circle
+    # quarter arc from (5,0) counterclockwise to (0,5): a point at 225 degrees is nearest an end point
+    p = (-5 / math.sqrt(2), -5 / math.sqrt(2))
+    assert shapes.dist_to_arc(p, (0, 0), 5, (5, 0), (0, 5)) == pytest.approx(math.dist(p, (5, 0)))
+    assert shapes.dist_to_arc((0, 4), (0, 0), 5, (5, 0), (0, 5)) == pytest.approx(1)
+    # the same end points clockwise cover the other three quarters
+    assert shapes.dist_to_arc(p, (0, 0), 5, (5, 0), (0, 5), ccw=False) == pytest.approx(0)
+    assert shapes.dist_to_polyline((1, 1), [(0, 0), (2, 0), (2, 2)]) == pytest.approx(1)

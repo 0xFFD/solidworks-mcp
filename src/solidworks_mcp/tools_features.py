@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from . import geometry as g
-from .com import SW, const_name, mm, rad
+from .com import SW, const_name, mm, rad, to_mm
 from .errors import SwError
 from .registry import WRITES, tool
 from .tools_sketch import SketchFrame, last_sketch
@@ -200,6 +200,65 @@ def sweep(
     else:
         f = fm.InsertProtrusionSwept4(False, True, twist_opt, False, False, 0, 0, False, 0.0, 0.0, 0, 0, True, True, True, rad(twist), True, circular, d, 0)
     return result(doc, f, "sweep", "The profile should be perpendicular to the path start and the path must not self-intersect.")
+
+
+@tool(WRITES)
+def helix(
+    pitch: Annotated[float | None, Field(description="Distance between turns in mm.")] = None,
+    revolutions: Annotated[float | None, Field(description="Number of turns.")] = None,
+    height: Annotated[float | None, Field(description="Total height in mm. Give two of pitch, revolutions and height.")] = None,
+    sketch: Annotated[str | None, Field(description="Sketch holding exactly one circle (its diameter is the helix diameter); default is the latest sketch.")] = None,
+    clockwise: bool = False,
+    reverse: Annotated[bool, Field(description="Grow the helix to the other side of the sketch plane.")] = False,
+    start_angle: Annotated[float, Field(description="Angle in degrees where the helix starts on the circle (0 = sketch +X).")] = 0.0,
+    taper_angle: Annotated[float, Field(description="Taper in degrees for a conical helix (0 for none).")] = 0.0,
+    taper_outward: bool = False,
+    spiral: Annotated[bool, Field(description="Flat spiral in the sketch plane instead (pitch = radial growth per turn).")] = False,
+) -> dict:
+    """Helix or spiral curve from a sketched circle, used as a sweep path for springs, coils, augers
+    and modelled threads (sweep(path='Helix/Spiral1', profile=...) with the profile sketched on a plane
+    through the helix start point)."""
+    doc = SW.active("part")
+    C = SW.C
+    if spiral:
+        if not (pitch and revolutions):
+            raise SwError("A spiral needs pitch and revolutions.")
+        mode = C.swHelixDefinedBySpiral
+    elif pitch and revolutions:
+        mode = C.swHelixDefinedByPitchAndRevolution
+    elif height and revolutions:
+        mode = C.swHelixDefinedByHeightAndRevolution
+    elif height and pitch:
+        mode = C.swHelixDefinedByHeightAndPitch
+    else:
+        raise SwError("Give two of pitch, revolutions and height.")
+    if not height:
+        height = (pitch or 0) * (revolutions or 0)
+    if not pitch:
+        pitch = height / revolutions
+    if not revolutions:
+        revolutions = height / pitch
+    name = _select_sketch(doc, sketch)
+    before = _last_feature(doc).Name
+    doc.InsertHelix(reverse, clockwise, bool(taper_angle), taper_outward, mode, mm(height), mm(pitch), float(revolutions), rad(taper_angle), rad(start_angle))
+    out = created_since(doc, before, "helix", f"{name} must contain exactly one circle.")
+    out.pop("volume_mm3", None)
+    out.update(pitch=pitch, revolutions=revolutions, height=None if spiral else height)
+    # where the curve starts and which way it leaves, so the sweep profile can be placed there
+    try:
+        rc = SW.cast(g.feature_by_name(doc, out["feature"]).GetSpecificFeature2(), "IReferenceCurve")
+        edge = SW.cast(rc.GetFirstSegment(), "IEdge")
+        prm = SW.cast(edge.GetCurveParams3(), "ICurveParamData")
+        tan = list(SW.cast(edge.GetCurve(), "ICurve").Evaluate2(prm.UMinValue, 1))[3:6]
+        n = math.sqrt(sum(c * c for c in tan)) or 1.0
+        out["start_point"] = [round(to_mm(c), 4) + 0.0 for c in list(prm.StartPoint)[:3]]
+        out["end_point"] = [round(to_mm(c), 4) + 0.0 for c in list(prm.EndPoint)[:3]]
+        out["start_tangent"] = [round(c / n, 4) + 0.0 for c in tan]
+        out["hint"] = ("Sketch the sweep profile centred on start_point, on a plane through the helix axis and start_point "
+                       "(a default plane when start_point lies on one; otherwise ref_plane).")
+    except Exception:
+        pass
+    return out
 
 
 @tool(WRITES)
@@ -494,14 +553,22 @@ def cosmetic_thread(
 # ------------------------------------------------------------------------------------------ patterns
 
 
-def _select_seeds(doc: Any, features: list[str], mark: int) -> None:
+def _select_seeds(doc: Any, features: list[str], mark: int) -> bool:
+    """Select pattern/mirror seeds: features with `mark`, bodies ('body:Name') with the body mark 256.
+    Returns True when bodies were given."""
+    has_bodies = False
     for n in features:
-        g.select(doc, n if ":" in n else f"feature:{n}", mark=mark)
+        if n.lower().startswith("body:"):
+            g.select(doc, n, mark=256)
+            has_bodies = True
+        else:
+            g.select(doc, n if ":" in n else f"feature:{n}", mark=mark)
+    return has_bodies
 
 
 @tool(WRITES)
 def linear_pattern(
-    features: Annotated[list[str], Field(description="Feature names to pattern.")],
+    features: Annotated[list[str], Field(description="Feature names to pattern, or bodies ('body:Name' from list_bodies) for a body pattern.")],
     direction: Annotated[str, Field(description="Direction: a linear edge, axis, or plane/planar face (its normal).")],
     count: Annotated[int, Field(ge=2, description="Instances in direction 1, including the seed.")],
     spacing: Annotated[float, Field(description="Spacing in mm.")],
@@ -511,7 +578,7 @@ def linear_pattern(
     spacing2: float = 0.0,
     reverse2: bool = False,
 ) -> dict:
-    """Linear (or rectangular) pattern of features."""
+    """Linear (or rectangular) pattern of features or bodies."""
     doc = SW.active("part")
 
     def attempt(rev: bool) -> Any:
@@ -536,14 +603,14 @@ def linear_pattern(
 
 @tool(WRITES)
 def circular_pattern(
-    features: Annotated[list[str], Field(description="Feature names to pattern.")],
+    features: Annotated[list[str], Field(description="Feature names to pattern, or bodies ('body:Name') for a body pattern.")],
     axis: Annotated[str, Field(description="Axis, cylindrical face or circular edge.")],
     count: Annotated[int, Field(ge=2, description="Total instances including the seed.")],
     angle: Annotated[float, Field(description="Total angle in degrees when equal_spacing, otherwise the angle between instances.")] = 360.0,
     equal_spacing: bool = True,
     reverse: bool = False,
 ) -> dict:
-    """Circular pattern of features (bolt circles, flanges, spokes)."""
+    """Circular pattern of features or bodies (bolt circles, flanges, spokes, rotor arms)."""
     doc = SW.active("part")
     doc.ClearSelection2(True)
     _select_seeds(doc, features, 4)
@@ -555,25 +622,253 @@ def circular_pattern(
 @tool(WRITES)
 def mirror(
     plane: Annotated[str, Field(description="Mirror plane or planar face.")],
-    features: Annotated[list[str] | None, Field(description="Features to mirror.")] = None,
-    bodies: Annotated[bool, Field(description="Mirror the whole solid body instead of features (merged with the original).")] = False,
+    features: Annotated[list[str] | None, Field(description="Features to mirror, or bodies ('body:Name').")] = None,
+    bodies: Annotated[bool, Field(description="Mirror every solid body instead of features.")] = False,
+    merge: Annotated[bool, Field(description="Merge mirrored bodies with the originals.")] = True,
 ) -> dict:
-    """Mirror features or the body about a plane."""
+    """Mirror features or bodies about a plane."""
     doc = SW.active("part")
     doc.ClearSelection2(True)
     if bodies:
-        sm = SW.cast(doc.SelectionManager, "ISelectionMgr")
         for b in g.bodies(doc):
-            data = SW.cast(sm.CreateSelectData(), "ISelectData")
-            data.Mark = 256
-            b.Select2(True, data)
+            g.Ref(b, "body", b.Name).select(doc, mark=256)
     elif features:
-        _select_seeds(doc, features, 1)
+        bodies = _select_seeds(doc, features, 1)
     else:
         raise SwError("Give features to mirror or set bodies=true.")
     g.select(doc, plane, mark=2)
-    f = doc.FeatureManager.InsertMirrorFeature2(bodies, False, bodies, False, 0)
+    f = doc.FeatureManager.InsertMirrorFeature2(bodies, False, bodies and merge, False, 0)
     return result(doc, f, "mirror")
+
+
+# ------------------------------------------------------------------------------------------ bodies
+
+_COMBINE = {"add": "SWBODYADD", "subtract": "SWBODYCUT", "common": "SWBODYINTERSECT"}
+
+
+def _body(doc: Any, ref: str) -> Any:
+    return g.resolve(doc, ref if ref.lower().startswith("body:") else f"body:{ref}").obj
+
+
+@tool(WRITES)
+def combine(
+    operation: Annotated[Literal["add", "subtract", "common"], Field(description="add: union; subtract: remove the tool bodies from the main body; common: keep only the overlap.")],
+    main: Annotated[str, Field(description="Main body ('body:Name' or the name from list_bodies).")],
+    tools: Annotated[list[str], Field(description="Tool bodies combined with the main body; they are consumed.")],
+) -> dict:
+    """Boolean combination of solid bodies in a multibody part (build bodies with extrude(merge=false),
+    import_file or move_body, then combine them)."""
+    doc = SW.active("part")
+    if not tools:
+        raise SwError("Give at least one tool body.")
+    m = _body(doc, main)
+    ts = [_body(doc, t) for t in tools]
+    doc.ClearSelection2(True)
+    if operation == "subtract":
+        f = doc.FeatureManager.InsertCombineFeature(SW.C.SWBODYCUT, m._oleobj_, _dispatch_array(ts))
+    else:  # add and common take every body as a tool and no main body
+        f = doc.FeatureManager.InsertCombineFeature(getattr(SW.C, _COMBINE[operation]), None, _dispatch_array([m, *ts]))
+    out = result(doc, f, "combine", "The bodies must touch or overlap (common and subtract need an overlap).")
+    out["bodies"] = [b.Name for b in g.bodies(doc)]
+    return out
+
+
+@tool(WRITES)
+def move_body(
+    bodies: Annotated[list[str], Field(description="Bodies to move or copy ('body:Name').")],
+    translate: Annotated[list[float], Field(description="Translation [dx, dy, dz] in mm.")] = [0.0, 0.0, 0.0],  # noqa: B006
+    rotate: Annotated[list[float], Field(description="Rotation [about X, about Y, about Z] in degrees, applied about center.")] = [0.0, 0.0, 0.0],  # noqa: B006
+    center: Annotated[list[float], Field(description="Centre of rotation [x, y, z] in mm.")] = [0.0, 0.0, 0.0],  # noqa: B006
+    copy: Annotated[bool, Field(description="Keep the originals and create copies.")] = False,
+    count: Annotated[int, Field(ge=1, le=100, description="Number of copies (each one step further) when copy is set.")] = 1,
+) -> dict:
+    """Move, rotate or copy solid bodies in a multibody part."""
+    doc = SW.active("part")
+    doc.ClearSelection2(True)
+    for b in bodies:
+        g.Ref(_body(doc, b), "body", b).select(doc, mark=1)
+    t = [mm(v) for v in (list(translate) + [0, 0, 0])[:3]]
+    c = [mm(v) for v in (list(center) + [0, 0, 0])[:3]]
+    r = [rad(v) for v in (list(rotate) + [0, 0, 0])[:3]]
+    f = doc.FeatureManager.InsertMoveCopyBody2(*t, 0.0, *c, *r, copy, count if copy else 1)
+    out = result(doc, f, "move/copy body")
+    out["bodies"] = [b.Name for b in g.bodies(doc)]
+    return out
+
+
+# ------------------------------------------------------------------------------------------ editing
+
+_DEFINITIONS = {
+    "Extrusion": "IExtrudeFeatureData2", "Boss": "IExtrudeFeatureData2", "Cut": "IExtrudeFeatureData2", "ICE": "IExtrudeFeatureData2",
+    "BaseBody": "IExtrudeFeatureData2", "Revolution": "IRevolveFeatureData2", "RevCut": "IRevolveFeatureData2",
+    "BaseRevolve": "IRevolveFeatureData2", "Fillet": "ISimpleFilletFeatureData2", "Chamfer": "IChamferFeatureData2",
+    "Shell": "IShellFeatureData", "LPattern": "ILinearPatternFeatureData", "CirPattern": "ICircularPatternFeatureData",
+}
+
+
+def _dispatch_array(objs: list[Any]) -> Any:
+    import pythoncom
+    from win32com.client import VARIANT
+
+    return VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_DISPATCH, [o._oleobj_ for o in objs])
+
+
+def _dimension_with_value(f: Any, value: float, skip: list[str]) -> str:
+    """Name of the feature's linear dimension that currently has `value` (metres)."""
+    C = SW.C
+    dd = f.GetFirstDisplayDimension()
+    while dd is not None:
+        d = SW.cast(SW.cast(dd, "IDisplayDimension").GetDimension2(0), "IDimension")
+        name = "@".join(d.FullName.split("@")[:2])
+        v = d.GetSystemValue3(C.swThisConfiguration, None)
+        v = v[0] if isinstance(v, (tuple, list)) else v
+        if d.GetType() == C.swDimensionParamTypeDoubleLinear and abs(v - value) < 1e-9 and name not in skip:
+            return name
+        dd = f.GetNextDisplayDimension(dd)
+    raise SwError(f"Could not find the spacing dimension of {f.Name}; use dimensions() and set_dimensions instead.")
+
+
+@tool(WRITES)
+def edit_feature(
+    feature: Annotated[str, Field(description="Feature name from list_features.")],
+    end: Annotated[Literal["blind", "through_all", "through_all_both", "midplane", "up_to_next"] | None, Field(description="Extrude/cut: new end condition.")] = None,
+    depth: Annotated[float | None, Field(description="Extrude/cut: depth in mm (direction 1).")] = None,
+    depth2: Annotated[float | None, Field(description="Extrude/cut: blind depth in the second direction; 0 removes the second direction.")] = None,
+    reverse: Annotated[bool | None, Field(description="Extrude/cut/revolve: flip direction 1.")] = None,
+    flip_side_to_cut: Annotated[bool | None, Field(description="Cut: remove the material outside the profile instead.")] = None,
+    merge: Annotated[bool | None, Field(description="Boss: merge with the existing bodies.")] = None,
+    angle: Annotated[float | None, Field(description="Revolve: angle in degrees. Circular pattern: total angle (equal spacing) or angle between instances.")] = None,
+    radius: Annotated[float | None, Field(description="Fillet: radius in mm.")] = None,
+    distance: Annotated[float | None, Field(description="Chamfer: distance in mm.")] = None,
+    thickness: Annotated[float | None, Field(description="Shell: wall thickness in mm.")] = None,
+    edges: Annotated[list[str] | None, Field(description="Fillet/chamfer: replace the edges it rounds ('edge@x,y,z', 'edge:N').")] = None,
+    count: Annotated[int | None, Field(ge=1, description="Pattern: instances in direction 1 (including the seed).")] = None,
+    spacing: Annotated[float | None, Field(description="Linear pattern: spacing in mm.")] = None,
+    count2: Annotated[int | None, Field(ge=1, description="Linear pattern: instances in direction 2.")] = None,
+    spacing2: Annotated[float | None, Field(description="Linear pattern: spacing in direction 2, mm.")] = None,
+) -> dict:
+    """Change how an existing feature is defined without rebuilding it from scratch: an extrude's end
+    condition (blind to through-all and back), depth, direction and second side; revolve angle; fillet
+    radius or edges; chamfer distance; shell thickness; pattern counts and spacing. Plain driving
+    dimensions can also be changed with set_dimensions."""
+    doc = SW.active("part")
+    C = SW.C
+    f = g.feature_by_name(doc, feature)
+    if f is None:
+        raise SwError(f"No feature named '{feature}'. Use list_features to see names.")
+    t = f.GetTypeName2()
+    iface = _DEFINITIONS.get(t)
+    if iface is None:
+        raise SwError(f"edit_feature does not support {t} features yet. Change their dimensions with set_dimensions, or delete and recreate them.")
+    data = SW.cast(f.GetDefinition(), iface)
+    if not data.AccessSelections(doc, None):
+        raise SwError(f"SolidWorks would not open {feature} for editing.")
+    changed: list[str] = []
+    spacing_dims: list[tuple[str, float]] = []
+
+    def unsupported(name: str) -> SwError:
+        return SwError(f"{name} does not apply to a {t} feature.")
+
+    try:
+        if iface == "IExtrudeFeatureData2":
+            if end is not None:
+                if end == "through_all_both":
+                    data.BothDirections = True
+                    data.SetEndCondition(True, C.swEndCondThroughAll)
+                    data.SetEndCondition(False, C.swEndCondThroughAll)
+                else:
+                    data.SetEndCondition(True, getattr(C, END[end]))
+                changed.append("end")
+            if depth is not None:
+                data.SetDepth(True, mm(depth))
+                changed.append("depth")
+            if depth2 is not None:
+                data.BothDirections = depth2 > 0
+                if depth2 > 0:
+                    data.SetEndCondition(False, C.swEndCondBlind)
+                    data.SetDepth(False, mm(depth2))
+                changed.append("depth2")
+            if reverse is not None:
+                data.ReverseDirection = reverse
+                changed.append("reverse")
+            if flip_side_to_cut is not None:
+                if data.IsBossFeature():
+                    raise unsupported("flip_side_to_cut")
+                data.FlipSideToCut = flip_side_to_cut
+                changed.append("flip_side_to_cut")
+            if merge is not None:
+                data.Merge = merge
+                changed.append("merge")
+        elif iface == "IRevolveFeatureData2":
+            if angle is not None:
+                data.SetRevolutionAngle(True, rad(angle))
+                changed.append("angle")
+            if reverse is not None:
+                data.ReverseDirection = reverse
+                changed.append("reverse")
+        elif iface == "ISimpleFilletFeatureData2":
+            if radius is not None:
+                data.DefaultRadius = mm(radius)
+                changed.append("radius")
+        elif iface == "IChamferFeatureData2":
+            if distance is not None:
+                data.SetEdgeChamferDistance(0, mm(distance))
+                changed.append("distance")
+        elif iface == "IShellFeatureData":
+            if thickness is not None:
+                data.Thickness = mm(thickness)
+                changed.append("thickness")
+        elif iface == "ILinearPatternFeatureData":
+            for name, val, prop in (("count", count, "D1TotalInstances"), ("count2", count2, "D2TotalInstances")):
+                if val is not None:
+                    setattr(data, prop, int(val))
+                    changed.append(name)
+            # ModifyDefinition rejects new spacings; they are changed through the pattern's dimensions below
+            for name, val, prop in (("spacing", spacing, "D1Spacing"), ("spacing2", spacing2, "D2Spacing")):
+                if val is not None:
+                    spacing_dims.append((_dimension_with_value(f, getattr(data, prop), [n for n, _ in spacing_dims]), mm(val)))
+                    changed.append(name)
+            if reverse is not None:
+                data.D1ReverseDirection = reverse
+                changed.append("reverse")
+        elif iface == "ICircularPatternFeatureData":
+            if count is not None:
+                data.TotalInstances = int(count)
+                changed.append("count")
+            if angle is not None:
+                data.Spacing = rad(angle)
+                changed.append("angle")
+            if reverse is not None:
+                data.ReverseDirection = reverse
+                changed.append("reverse")
+        if edges is not None:
+            if iface not in ("ISimpleFilletFeatureData2", "IChamferFeatureData2"):
+                raise unsupported("edges")
+            data.Edges = _dispatch_array(_edges_from(doc, edges, None))
+            changed.append("edges")
+        given = {k for k, v in dict(end=end, depth=depth, depth2=depth2, reverse=reverse, flip_side_to_cut=flip_side_to_cut, merge=merge, angle=angle,
+                                    radius=radius, distance=distance, thickness=thickness, count=count, spacing=spacing, count2=count2,
+                                    spacing2=spacing2).items() if v is not None}
+        if ignored := sorted(given - set(changed)):
+            raise unsupported(", ".join(ignored))
+        if not changed:
+            raise SwError("Nothing to change: give at least one new value.")
+    except BaseException:
+        data.ReleaseSelectionAccess()
+        raise
+    if len(changed) > len(spacing_dims):
+        if not f.ModifyDefinition(data, doc, None):
+            raise SwError(f"SolidWorks rejected the new definition of {feature}; the old one is kept.")
+    else:
+        data.ReleaseSelectionAccess()
+    for name, value in spacing_dims:
+        dim = SW.cast(doc.Parameter(name), "IDimension")
+        if dim.SetSystemValue3(value, C.swSetValue_InAllConfigurations, None) not in (0, None):
+            raise SwError(f"SolidWorks rejected the new spacing ({name}).")
+    doc.EditRebuild3()
+    out = result(doc, f, "feature")
+    out["changed"] = changed
+    return out
 
 
 # ------------------------------------------------------------------------------------------ reference geometry

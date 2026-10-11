@@ -54,7 +54,12 @@ def list_features(include_reference: Annotated[bool, Field(description="Include 
 
                 row["status"] = sketch_status(sk)
         rows.append(row)
-    return {"document": doc.GetTitle(), "features": rows, "rebuild_errors": errors}
+    out: dict[str, Any] = {"document": doc.GetTitle(), "features": rows, "rebuild_errors": errors}
+    if doc_kind(doc) != "drawing":
+        out["configuration"] = SW.cast(doc.ConfigurationManager.ActiveConfiguration, "IConfiguration").Name
+        if len(names := _config_names(doc)) > 1:
+            out["configurations"] = names
+    return out
 
 
 @tool(READ_ONLY)
@@ -118,6 +123,20 @@ def list_edges(
     return {"reference": prefix + "<i>", "count": len(rows), "edges": rows[:limit]}
 
 
+@tool(READ_ONLY)
+def list_bodies() -> dict:
+    """Solid bodies of the active part with volume and bounding box, named for 'body:Name' references
+    (combine, move_body, patterns and mirror)."""
+    doc = SW.active("part")
+    rows = []
+    for b in g.bodies(doc):
+        mp = b.GetMassProperties(1.0)
+        box = list(b.GetBodyBox())
+        rows.append({"name": b.Name, "volume_mm3": round(mp[3] * 1e9, 3), "faces": b.GetFaceCount(),
+                     "box_min": [round(to_mm(v), 3) + 0.0 for v in box[:3]], "box_max": [round(to_mm(v), 3) + 0.0 for v in box[3:6]]})
+    return {"reference": "body:<name>", "count": len(rows), "bodies": rows}
+
+
 def _dims_of(f: Any) -> list[dict]:
     out = []
     C = SW.C
@@ -130,7 +149,8 @@ def _dims_of(f: Any) -> list[dict]:
             v = v[0] if isinstance(v, (tuple, list)) else v
             kind = d.GetType()
             ang = kind == C.swDimensionParamTypeDoubleAngular
-            row = {"name": d.FullName, "value": to_deg(v) if ang else (to_mm(v) if kind == C.swDimensionParamTypeDoubleLinear else v), "unit": "deg" if ang else "mm"}
+            lin = kind == C.swDimensionParamTypeDoubleLinear
+            row = {"name": d.FullName, "value": to_deg(v) if ang else (to_mm(v) if lin else v), "unit": "deg" if ang else ("mm" if lin else "count")}
             if d.DrivenState == C.swDimensionDriven:
                 row["driven"] = True
             out.append(row)
@@ -161,22 +181,28 @@ def dimensions(
 
 @tool(WRITES)
 def set_dimensions(
-    values: Annotated[dict[str, float], Field(description="Full dimension name to new value: mm for lengths, degrees for angles, e.g. {'D1@Boss-Extrude1': 12.5}.")],
+    values: Annotated[dict[str, float], Field(description="Full dimension name to new value: mm for lengths, degrees for angles, plain numbers for counts, e.g. {'D1@Boss-Extrude1': 12.5}.")],
+    configurations: Annotated[list[str] | None, Field(description="Only change these configurations (names from configurations()); default is all.")] = None,
 ) -> dict:
-    """Change driving dimensions in all configurations and rebuild."""
+    """Change driving dimensions (in all configurations unless some are named) and rebuild."""
     doc = SW.active()
     C = SW.C
+    where, names = _config_scope(doc, configurations, C.swSetValue_InAllConfigurations, C.swSetValue_InSpecificConfigurations)
     changed = {}
     for name, val in values.items():
         d = doc.Parameter(name)
         if d is None:
             raise SwError(f"No dimension named '{name}'. Use dimensions() to list them.")
         d = SW.cast(d, "IDimension")
-        sysval = val * math.pi / 180 if d.GetType() == C.swDimensionParamTypeDoubleAngular else mm(val)
-        r = d.SetSystemValue3(sysval, C.swSetValue_InAllConfigurations, None)
+        kind = d.GetType()
+        sysval = val * math.pi / 180 if kind == C.swDimensionParamTypeDoubleAngular else (mm(val) if kind == C.swDimensionParamTypeDoubleLinear else val)
+        r = d.SetSystemValue3(sysval, where, names)
         if r not in (0, None):
             raise SwError(f"SolidWorks rejected {name} = {val} (code {r}). Driven dimensions cannot be set.")
         changed[name] = val
+    if doc.SketchManager.ActiveSketch is not None:
+        doc.GraphicsRedraw2()  # a rebuild would close the open sketch; it solves on its own
+        return {"changed": changed, "note": "The open sketch was updated; features update when it is closed."}
     doc.EditRebuild3()
     errs = [{"feature": f.Name, "rebuild": e} for f in g.iter_features(doc) if (e := feature_error(f))]
     return {"changed": changed, "rebuild_errors": errs}
@@ -186,10 +212,12 @@ def set_dimensions(
 def feature_action(
     features: Annotated[list[str], Field(description="Feature names.")],
     action: Annotated[Literal["suppress", "unsuppress", "delete"], Field(description="delete also removes the feature's absorbed sketches.")],
+    configurations: Annotated[list[str] | None, Field(description="Suppress/unsuppress only in these configurations; default is all.")] = None,
 ) -> dict:
-    """Suppress, unsuppress or delete features."""
+    """Suppress, unsuppress or delete features (suppression per configuration makes part variants)."""
     doc = SW.active()
     C = SW.C
+    where, names = _config_scope(doc, configurations, C.swAllConfiguration, C.swSpecifyConfiguration)
     done = []
     for n in features:
         f = g.feature_by_name(doc, n)
@@ -202,12 +230,80 @@ def feature_action(
                 raise SwError(f"Could not delete {n}.")
         else:
             state = 0 if action == "suppress" else 2  # swSuppressFeature / swUnSuppressFeature
-            if not f.SetSuppression2(state, C.swAllConfiguration, None):
+            if not f.SetSuppression2(state, where, names):
                 raise SwError(f"Could not {action} {n}.")
         done.append(n)
     doc.ClearSelection2(True)
     doc.EditRebuild3()
     return {action: done}
+
+
+def _config_names(doc: Any) -> list[str]:
+    return list(doc.GetConfigurationNames() or [])
+
+
+def _config_scope(doc: Any, configurations: list[str] | None, all_value: int, specific_value: int) -> tuple[int, Any]:
+    """SolidWorks 'which configurations' arguments: all, or the named ones (checked to exist)."""
+    if not configurations:
+        return all_value, None
+    known = _config_names(doc)
+    if missing := [c for c in configurations if c not in known]:
+        raise SwError(f"No configuration named {missing}. Configurations: {known}")
+    import pythoncom
+    from win32com.client import VARIANT
+
+    return specific_value, VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_BSTR, list(configurations))
+
+
+@tool(WRITES)
+def configurations(
+    action: Annotated[Literal["list", "add", "activate", "delete"], Field(description="list them, add a new one (it becomes active), activate one, or delete one.")] = "list",
+    name: Annotated[str | None, Field(description="Configuration name (add, activate, delete).")] = None,
+    description: Annotated[str | None, Field(description="Description for a new configuration (shown in BOMs, e.g. 'Short arm variant').")] = None,
+    parent: Annotated[str | None, Field(description="Make the new configuration a derived (child) configuration of this one.")] = None,
+) -> dict:
+    """Configurations of the active part or assembly: variants of one design in one file. Create one,
+    then change it with set_dimensions(..., configurations=[name]) and feature_action(..., configurations=[name])."""
+    doc = SW.active()
+    if doc_kind(doc) == "drawing":
+        raise SwError("Drawings have no configurations; activate the part or assembly.")
+    cm = SW.cast(doc.ConfigurationManager, "IConfigurationManager")
+    if action != "list" and not name:
+        raise SwError(f"{action} needs a configuration name.")
+    known = _config_names(doc)
+    if action == "add":
+        if name in known:
+            raise SwError(f"A configuration named '{name}' already exists.")
+        if parent and parent not in known:
+            raise SwError(f"No configuration named '{parent}'. Configurations: {known}")
+        cfg = cm.AddConfiguration2(name, "", "", 0, parent or "", description or "", True)
+        if cfg is None:
+            raise SwError(f"SolidWorks could not add the configuration '{name}'.")
+        doc.ShowConfiguration2(name)
+    elif action == "activate":
+        if name not in known:
+            raise SwError(f"No configuration named '{name}'. Configurations: {known}")
+        if not doc.ShowConfiguration2(name):
+            raise SwError(f"SolidWorks could not activate '{name}'.")
+        doc.EditRebuild3()
+    elif action == "delete":
+        if name not in known:
+            raise SwError(f"No configuration named '{name}'. Configurations: {known}")
+        if SW.cast(cm.ActiveConfiguration, "IConfiguration").Name == name:
+            raise SwError(f"'{name}' is active; activate another configuration before deleting it.")
+        if not doc.DeleteConfiguration2(name):
+            raise SwError(f"SolidWorks could not delete '{name}'.")
+    rows = []
+    for n in _config_names(doc):
+        cfg = SW.cast(doc.GetConfigurationByName(n), "IConfiguration")
+        row: dict[str, Any] = {"name": n}
+        if cfg is not None:
+            if cfg.Description and cfg.Description != n:
+                row["description"] = cfg.Description
+            if cfg.IsDerived():
+                row["parent"] = SW.cast(cfg.GetParent(), "IConfiguration").Name
+        rows.append(row)
+    return {"active": SW.cast(cm.ActiveConfiguration, "IConfiguration").Name, "configurations": rows}
 
 
 @tool(DESTRUCTIVE)

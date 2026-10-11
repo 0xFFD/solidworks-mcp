@@ -203,6 +203,92 @@ def test_airframe_features(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_sketch_and_feature_editing(tmp_path: Path):
+    """Sketch editing, feature redefinition, configurations, helices, 3D sketches and multibody tools."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-20, -10], "corner2": [20, 10]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=5)
+
+            # offset a converted face outline, trim it with a circle, dimension and constrain it
+            await c.call("start_sketch", on="face@0,5,0")
+            edit = await c.call("modify_sketch", operations=[
+                {"op": "convert", "refs": ["face@0,5,0"]},
+                {"op": "offset", "items": ["seg@0,10"], "distance": -3},
+                {"op": "construction", "items": ["seg@0,10", "seg@0,-10", "seg@20,0", "seg@-20,0"]},
+                {"op": "fillet", "items": ["pt@17,7"], "radius": 2},
+            ])
+            assert [d.get("segments_added") for d in edit["done"]] == [4, 4, None, 1]
+            await c.call("sketch", entities=[{"type": "circle", "center": [17, 0], "radius": 4}])
+            await c.call("modify_sketch", operations=[{"op": "trim", "at": [21, 0]}, {"op": "trim", "at": [17, -2]}])
+            segs = (await c.call("list_sketch", near=[17, 0], limit=3))["segments"]
+            arc = next(s for s in segs if s["type"] == "arc" and s["radius"] == 4)
+            assert sorted([arc["start"], arc["end"]]) == [[20.0, -2.6458], [20.0, 2.6458]]
+            await c.call("sketch", entities=[{"type": "line", "from": [-10, 0], "to": [0, 3]}, {"type": "circle", "center": [-8, -3], "radius": 1}])
+            dims = await c.call("modify_sketch", operations=[
+                {"op": "relation", "type": "horizontal", "items": ["seg@-5,1.5"]},
+                {"op": "dimension", "items": ["seg@-5,0"], "value": 12},
+                {"op": "dimension", "items": ["seg@-7,-3"], "value": 3},
+                {"op": "delete", "items": ["seg@-5,0"]},
+            ])
+            assert dims["done"][1]["value"] == 12 and dims["done"][2]["value"] == 3
+            assert "nearest one is" in await c.fails("modify_sketch", operations=[{"op": "trim", "at": [50, 50]}])
+            await c.call("set_dimensions", values={dims["done"][2]["dimension"]: 4})  # sketch stays open
+            assert (await c.call("finish_sketch"))["closed_regions"] >= 1
+
+            # redefine a cut: blind -> through all -> blind
+            await c.call("start_sketch", on="face@0,5,0")
+            await c.call("sketch", entities=[{"type": "circle", "center": [-12, 0], "diameter": 4}])
+            await c.call("finish_sketch")
+            cut = await c.call("extrude", cut=True, depth=2)
+            through = await c.call("edit_feature", feature=cut["feature"], end="through_all")
+            assert through["volume_mm3"] == pytest.approx(4000 - 3.14159265 * 4 * 5, abs=0.01)
+            two = await c.call("edit_feature", feature="Boss-Extrude1", depth2=4)
+            assert two["volume_mm3"] == pytest.approx(through["volume_mm3"] + 800 * 4 - 3.14159265 * 4 * 4, abs=0.5)
+
+            # configurations: a variant without the hole
+            await c.call("configurations", action="add", name="Blank")
+            await c.call("feature_action", features=[cut["feature"]], action="suppress", configurations=["Blank"])
+            blank = (await c.call("mass_properties"))["volume_mm3"]
+            await c.call("configurations", action="activate", name="Default")
+            assert blank > (await c.call("mass_properties"))["volume_mm3"]
+            await c.call("close_document")
+
+            # spring: helix plus swept wire; 3D sketch sweep path
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "circle", "center": [0, 0], "diameter": 20}])
+            await c.call("finish_sketch")
+            hx = await c.call("helix", pitch=5, revolutions=6)
+            assert hx["end_point"][1] == pytest.approx(30)
+            await c.call("start_sketch", on="plane:Right")
+            await c.call("sketch", coords="model", entities=[{"type": "circle", "center": hx["start_point"], "diameter": 2}])
+            await c.call("finish_sketch")
+            spring = await c.call("sweep", path=hx["feature"], profile="Sketch2")
+            assert spring["volume_mm3"] == pytest.approx(3.14159265 * 1 * ((3.14159265 * 20) ** 2 + 25) ** 0.5 * 6, rel=0.01)
+            await c.call("start_sketch", on="3d")
+            await c.call("sketch", entities=[{"type": "polyline", "points": [[40, 0, 0], [40, 50, 0], [70, 50, 20]]}])
+            assert (await c.call("finish_sketch"))["3d"] is True
+            await c.call("sweep", path="3DSketch1", circular_diameter=4)
+            assert len((await c.call("list_bodies"))["bodies"]) == 2
+
+            # multibody: an overlapping copy of the tube, merged back, and a mirrored spring
+            moved = await c.call("move_body", bodies=["body:Sweep2"], translate=[0, 0, 2], copy=True)
+            assert len(moved["bodies"]) == 3
+            merged = await c.call("combine", operation="add", main="Sweep2", tools=[moved["feature"]])
+            assert len(merged["bodies"]) == 2
+            mirrored = await c.call("mirror", plane="plane:Front", features=["body:Sweep1"], merge=False)
+            assert mirrored["type"] == "MirrorSolid" and len((await c.call("list_bodies"))["bodies"]) == 3
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

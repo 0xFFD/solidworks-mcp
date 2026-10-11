@@ -187,11 +187,12 @@ def test_tools_registered_with_annotations():
 
     tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
     assert len(tools) >= 50
-    for name in ("sw_info", "list_faces", "mass_properties", "screenshot", "check_geometry", "list_materials"):
+    for name in ("sw_info", "list_faces", "mass_properties", "screenshot", "check_geometry", "list_materials", "list_sketch", "list_bodies"):
         assert tools[name].annotations.read_only_hint is True, name
     for name in ("close_document", "feature_action", "undo"):
         assert tools[name].annotations.destructive_hint is True, name
-    for name in ("extrude", "hole", "export", "create_drawing", "add_geometric_tolerance"):
+    for name in ("extrude", "hole", "export", "create_drawing", "add_geometric_tolerance", "modify_sketch", "edit_feature", "helix",
+                 "configurations", "combine", "move_body"):
         assert tools[name].annotations.read_only_hint is False, name
     assert "millimetres" in server.INSTRUCTIONS
 
@@ -232,3 +233,13 @@ def test_cli_version(capsys):
     with pytest.raises(SystemExit):
         cli.main(["--version"])
     assert __version__ in capsys.readouterr().out
+
+
+def test_sketch_references():
+    from solidworks_mcp.tools_sketch import _SEG_RE
+
+    assert _SEG_RE.match("seg:3").group(2) == "3"
+    assert _SEG_RE.match("pt@ -1.5, 2e-3").groups()[2:] == ("-1.5", "2e-3")
+    assert _SEG_RE.match("SEG@4,5") is not None
+    for bad in ("seg", "seg:", "seg@1", "face@1,2,3", "pt:1.5"):
+        assert _SEG_RE.match(bad) is None, bad

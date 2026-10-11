@@ -9,7 +9,7 @@ output or from coordinates it already knows:
     edge@25,0,0         the edge closest to the point
     face:Bracket-1/3    face 3 of assembly component Bracket-1 (same for edge:, face@ and edge@)
     plane:Top           a reference plane by name; Front, Top and Right map to the default planes
-    axis:Axis1, feature:Boss-Extrude1, sketch:Sketch2, point:Point1, comp:Bracket-1
+    axis:Axis1, feature:Boss-Extrude1, sketch:Sketch2, point:Point1, comp:Bracket-1, body:Boss-Extrude1
     Front Plane         a bare name is looked up as a feature (planes, sketches, axes, features)
 """
 
@@ -203,8 +203,8 @@ def edge_info(edge: Any, index: int, xf: Placement | None = None) -> dict:
 
 @dataclass
 class Ref:
-    obj: Any  # IFace2, IEdge, IFeature or IComponent2
-    kind: str  # face, edge, feature, component
+    obj: Any  # IFace2, IEdge, IFeature, IComponent2 or IBody2
+    kind: str  # face, edge, feature, component, body
     label: str
 
     def select(self, doc: Any, append: bool = True, mark: int = 0) -> None:
@@ -216,6 +216,11 @@ class Ref:
             ok = SW.cast(self.obj, "IEntity").Select4(append, data)
         elif self.kind == "feature":
             ok = self.obj.Select2(append, mark)
+        elif self.kind == "body":
+            sm = SW.cast(doc.SelectionManager, "ISelectionMgr")
+            data = SW.cast(sm.CreateSelectData(), "ISelectData")
+            data.Mark = mark
+            ok = self.obj.Select2(append, data)
         elif self.kind == "component":
             sm = SW.cast(doc.SelectionManager, "ISelectionMgr")
             data = SW.cast(sm.CreateSelectData(), "ISelectData")
@@ -289,6 +294,11 @@ def resolve(doc: Any, ref: str) -> Ref:
         prefix, name = "feature", ref
     if prefix == "comp":
         return Ref(find_component(doc, name), "component", ref)
+    if prefix == "body":
+        found = [b for b in bodies(doc) if b.Name == name]
+        if not found:
+            raise SwError(f"No solid body named '{name}'. Bodies: {[b.Name for b in bodies(doc)]}")
+        return Ref(found[0], "body", ref)
     if prefix == "plane" and name.lower() in _DEFAULT_PLANES:
         return Ref(default_plane(doc, name.lower()), "feature", ref)
     if name.lower().removesuffix(" plane") in _DEFAULT_PLANES and feature_by_name(doc, name) is None:

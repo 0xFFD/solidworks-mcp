@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
 from . import geometry as g
 from . import shapes
-from .com import SW, mm, to_mm
+from .com import SW, const_name, mm, to_mm
 from .errors import SwError
-from .registry import WRITES, tool
+from .registry import READ_ONLY, WRITES, tool
 
 STATUS = {1: "unknown", 2: "under_defined", 3: "fully_defined", 4: "over_defined", 5: "no_solution", 6: "invalid_solution", 7: "autosolve_off"}
 
@@ -259,6 +260,10 @@ def _add(doc: Any, sm: Any, e: dict) -> list:
                     fmt = SW.cast(st.GetTextFormat(), "ITextFormat")
                     if fmt is not None:
                         fmt.CharHeight = h
+                        if e.get("font"):
+                            fmt.TypeFaceName = str(e["font"])
+                        if e.get("bold"):
+                            fmt.Bold = True
                         if ang:
                             fmt.Escapement = ang
                         st.SetTextFormat(False, fmt)
@@ -281,19 +286,69 @@ def _add(doc: Any, sm: Any, e: dict) -> list:
     return segs
 
 
+def _add3d(sm: Any, e: dict) -> list:
+    """Create one entity of a 3D sketch (points [x, y, z] in model mm)."""
+    t = (e.get("type") or "").lower()
+
+    def pts(key: str) -> list[tuple[float, float, float]]:
+        raw = e.get(key) if key == "points" else [e.get(key)]
+        out = []
+        for p in raw or []:
+            if not isinstance(p, (list, tuple)) or len(p) != 3:
+                raise SwError(f"{t}.{key}: in a 3D sketch points are [x, y, z] in model mm.")
+            out.append(tuple(mm(c) for c in p))
+        return out
+
+    segs: list = []
+    if t in ("line", "centerline"):
+        (a,), (b,) = pts("from"), pts("to")
+        segs.append((sm.CreateCenterLine if t == "centerline" else sm.CreateLine)(*a, *b))
+    elif t == "polyline":
+        ps = pts("points")
+        if e.get("radius"):
+            raise SwError("polyline corner radii are not available in a 3D sketch; use a spline, or fillet the swept body.")
+        if e.get("closed"):
+            ps.append(ps[0])
+        if len(ps) < 2:
+            raise SwError("polyline needs at least 2 points.")
+        segs += [sm.CreateLine(*ps[k], *ps[k + 1]) for k in range(len(ps) - 1)]
+    elif t == "spline":
+        ps = pts("points")
+        if len(ps) < 2:
+            raise SwError("spline needs at least 2 points.")
+        segs.append(sm.CreateSpline2(_doubles([c for p in ps for c in p]), True))
+    elif t == "point":
+        (a,) = pts("at")
+        segs.append(sm.CreatePoint(*a))
+    else:
+        raise SwError(f"'{t}' is not available in a 3D sketch. Use line, centerline, polyline, spline or point.")
+    if not segs or any(s is None for s in segs):
+        raise SwError(f"SolidWorks rejected the {t} {e}.")
+    if e.get("construction"):
+        for s in segs:
+            SW.cast(s, "ISketchSegment").ConstructionGeometry = True
+    return segs
+
+
 # ------------------------------------------------------------------------------------------ tools
 
 
 @tool(WRITES)
 def start_sketch(
-    on: Annotated[str, Field(description="Sketch plane: 'plane:Front' (XY), 'plane:Top' (XZ), 'plane:Right' (YZ), another plane name, or a planar face ('face:3' or 'face@x,y,z').")],
+    on: Annotated[str, Field(description="Sketch plane: 'plane:Front' (XY), 'plane:Top' (XZ), 'plane:Right' (YZ), another plane name, a planar face ('face:3' or 'face@x,y,z'), or '3d' for a 3D sketch (points [x, y, z] in model mm; for sweep paths, tubes and harness runs).")],
 ) -> dict:
-    """Open a new 2D sketch on a plane or planar face. Returns how sketch X/Y map into model space so
-    coordinates can be converted; on the Top plane sketch +Y is model -Z."""
+    """Open a new 2D sketch on a plane or planar face, or a 3D sketch. Returns how sketch X/Y map into
+    model space so coordinates can be converted; on the Top plane sketch +Y is model -Z."""
     doc = SW.active()
     if doc.SketchManager.ActiveSketch is not None:
         doc.SketchManager.InsertSketch(True)
     doc.ClearSelection2(True)
+    if on.strip().lower() in ("3d", "3d_sketch", "3dsketch"):
+        doc.SketchManager.Insert3DSketch(True)
+        sk = doc.SketchManager.ActiveSketch
+        if sk is None:
+            raise SwError("Could not start a 3D sketch.")
+        return {"sketch": sketch_name(doc, SW.cast(sk, "ISketch")), "3d": True, "note": "Points are [x, y, z] in model mm."}
     g.select(doc, on, append=False)
     doc.SketchManager.InsertSketch(True)
     sk = doc.SketchManager.ActiveSketch
@@ -342,15 +397,17 @@ def sketch(
         "{type:'arc', center, start, end, direction:'ccw'|'cw'}, {type:'ellipse', center, radius_x, radius_y, angle}, "
         "{type:'polygon', center, sides, radius, inscribed, angle}, {type:'slot', start, end, width}, {type:'point', at}, {type:'spline', points}, "
         "{type:'airfoil', naca:'2412', chord, origin (leading edge), angle (degrees counterclockwise), points} (NACA 4-digit section as a closed profile), "
-        "{type:'text', at, text, height, angle, spacing} (part number marking, at = start of the baseline, spacing scales the character pitch, default 1.0; extrude-cut it about 0.3 mm). "
+        "{type:'text', at, text, height, angle, spacing, font, bold} (part number marking, at = start of the baseline, spacing scales the character pitch, default 1.0, font a Windows font name such as 'Arial' or a stencil font; extrude-cut it about 0.3 mm). "
         "Any entity can carry mirror:'left_right' | 'up_down' | 'both' to add copies mirrored about the sketch axes, "
-        "and construction:true to make it construction geometry."))],
+        "and construction:true to make it construction geometry. In a 3D sketch (start_sketch on='3d') points are [x, y, z] in model mm "
+        "and the types are line, centerline, polyline (sharp corners), spline and point."))],
     coords: Annotated[Literal["sketch", "model"], Field(description="Coordinate space of the points.")] = "sketch",
 ) -> dict:
     """Add geometry to the open sketch at exact coordinates (snapping and inference are bypassed)."""
     doc = SW.active()
     sk = active_sketch(doc)
-    frame = SketchFrame(sk) if coords == "model" else None
+    is3d = bool(sk.Is3D())
+    frame = SketchFrame(sk) if coords == "model" and not is3d else None
     sm = doc.SketchManager
     sm.AddToDB = True
     sm.DisplayWhenAdded = False
@@ -358,6 +415,9 @@ def sketch(
     try:
         for i, e in enumerate(entities):
             try:
+                if is3d:
+                    created.append({"type": e.get("type"), "segments": len(_add3d(sm, e))})
+                    continue
                 base = _to_sketch_mm(e, frame) if frame else e
                 count = sum(len(_add(doc, sm, item)) for item in shapes.expand_mirror(base))
                 created.append({"type": e.get("type"), "segments": count})
@@ -394,12 +454,355 @@ def finish_sketch(
         if sketch_status(sk) != "fully_defined":
             note = "SolidWorks could not fully define every entity; check the sketch in SolidWorks."
     status = sketch_status(sk)
+    is3d = bool(sk.Is3D())
     regions = sk.GetSketchRegionCount()
     doc.SketchManager.InsertSketch(True)
     doc.ClearSelection2(True)
+    if is3d:
+        return {"sketch": name, "status": status, "3d": True}
     out = {"sketch": name, "status": status, "closed_regions": regions}
     if note:
         out["note"] = note
     if regions == 0:
         out["hint"] = "No closed region: extrude and revolve need a closed profile (sweep paths and guide curves do not)."
     return out
+
+
+# ------------------------------------------------------------------------------------------ editing
+
+_SEG_RE = re.compile(r"^(seg|pt)(?::(\d+)|@\s*(-?[\d.]+(?:e-?\d+)?)\s*,\s*(-?[\d.]+(?:e-?\d+)?)\s*)$", re.I)
+
+RELATIONS = {
+    "horizontal": "sgHORIZONTAL2D", "vertical": "sgVERTICAL2D", "coincident": "sgCOINCIDENT", "tangent": "sgTANGENT",
+    "parallel": "sgPARALLEL", "perpendicular": "sgPERPENDICULAR", "concentric": "sgCONCENTRIC", "equal": "sgSAMELENGTH",
+    "collinear": "sgCOLINEAR", "fixed": "sgFIXED", "midpoint": "sgATMIDDLE", "coradial": "sgCORADIAL",
+    "symmetric": "sgSYMMETRIC", "merge": "sgMERGEPOINTS",
+}
+
+
+def _xy(p: Any) -> tuple[float, float]:
+    p = SW.cast(p, "ISketchPoint")
+    return to_mm(p.X), to_mm(p.Y)
+
+
+def _seg_geom(seg: Any) -> dict:
+    """Describe a sketch segment in sketch mm. Keys starting with '_' are for picking only."""
+    C = SW.C
+    t = seg.GetType()
+    r = lambda v: round(v, 4) + 0.0  # noqa: E731
+    info: dict[str, Any] = {}
+    if t == C.swSketchLINE:
+        ln = SW.cast(seg, "ISketchLine")
+        a, b = _xy(ln.GetStartPoint2()), _xy(ln.GetEndPoint2())
+        info.update(type="line", start=[r(v) for v in a], end=[r(v) for v in b], length=r(math.dist(a, b)), _pick=("line", a, b))
+    elif t == C.swSketchARC:
+        arc = SW.cast(seg, "ISketchArc")
+        c, rad_ = _xy(arc.GetCenterPoint2()), to_mm(arc.GetRadius())
+        if arc.IsCircle():
+            info.update(type="circle", center=[r(v) for v in c], radius=r(rad_), _pick=("arc", c, rad_, None, None, True))
+        else:
+            s, e = _xy(arc.GetStartPoint2()), _xy(arc.GetEndPoint2())
+            ccw = arc.GetRotationDir() != -1
+            info.update(type="arc", center=[r(v) for v in c], radius=r(rad_), start=[r(v) for v in s], end=[r(v) for v in e],
+                        _pick=("arc", c, rad_, s, e, ccw))
+    elif t == C.swSketchELLIPSE:
+        el = SW.cast(seg, "ISketchEllipse")
+        c, a, b = _xy(el.GetCenterPoint2()), _xy(el.GetMajorPoint2()), _xy(el.GetMinorPoint2())
+        ra, rb = math.dist(c, a), math.dist(c, b)
+        ang = math.atan2(a[1] - c[1], a[0] - c[0])
+        ring = [(c[0] + ra * math.cos(u) * math.cos(ang) - rb * math.sin(u) * math.sin(ang),
+                 c[1] + ra * math.cos(u) * math.sin(ang) + rb * math.sin(u) * math.cos(ang)) for u in (2 * math.pi * k / 72 for k in range(73))]
+        info.update(type="ellipse", center=[r(v) for v in c], radius_x=r(ra), radius_y=r(rb), _pick=("poly", ring))
+    elif t == C.swSketchSPLINE:
+        sp = SW.cast(seg, "ISketchSpline")
+        pts = [_xy(q) for q in sp.GetPoints2() or []]
+        info.update(type="spline", start=[r(v) for v in pts[0]], end=[r(v) for v in pts[-1]], points=len(pts), _pick=("poly", pts))
+    elif t == C.swSketchTEXT:
+        info.update(type="text")
+    else:
+        info.update(type=const_name("swSketch", t).lower())
+    if seg.ConstructionGeometry:
+        info["construction"] = True
+    return info
+
+
+def _dist(info: dict, p: tuple[float, float]) -> float:
+    pick = info.get("_pick")
+    if pick is None:
+        return float("inf")
+    if pick[0] == "line":
+        return shapes.dist_to_line(p, pick[1], pick[2])
+    if pick[0] == "arc":
+        return shapes.dist_to_arc(p, *pick[1:])
+    return shapes.dist_to_polyline(p, pick[1])
+
+
+def _segments(sk: Any) -> list[Any]:
+    return SW.cast_all(sk.GetSketchSegments(), "ISketchSegment")
+
+
+def _points(sk: Any) -> list[Any]:
+    return SW.cast_all(sk.GetSketchPoints2(), "ISketchPoint")
+
+
+def _sketch_item(sk: Any, ref: str) -> Any:
+    """A sketch segment or point: 'seg:N', 'pt:N' (list_sketch indices) or 'seg@x,y', 'pt@x,y' (nearest, sketch mm)."""
+    m = _SEG_RE.match(ref.strip())
+    if not m:
+        raise SwError(f"'{ref}' is not a sketch reference. Use 'seg:N', 'pt:N', 'seg@x,y' or 'pt@x,y' (sketch mm, from list_sketch).")
+    kind = m.group(1).lower()
+    what = "segments" if kind == "seg" else "points"
+    items = _segments(sk) if kind == "seg" else _points(sk)
+    if m.group(2) is not None:
+        i = int(m.group(2))
+        if i >= len(items):
+            raise SwError(f"{ref}: the sketch has {len(items)} {what}. Indices change after edits; run list_sketch again.")
+        return items[i]
+    p = (float(m.group(3)), float(m.group(4)))
+    dists = [math.dist(p, _xy(q)) for q in items] if kind == "pt" else [_dist(_seg_geom(s), p) for s in items]
+    if not dists:
+        raise SwError(f"{ref}: the sketch has no {what}.")
+    i = min(range(len(dists)), key=dists.__getitem__)
+    if dists[i] > 0.5:
+        raise SwError(f"{ref}: the nearest one is {dists[i]:.3f} mm away. Use list_sketch for exact positions.")
+    return items[i]
+
+
+def _select_items(doc: Any, sk: Any, refs: list[str], mark: int = 0) -> list[Any]:
+    """Add sketch items ('seg@..', 'pt:..'), the origin ('origin') or model entities (edges, faces, planes) to the selection."""
+    sm = SW.cast(doc.SelectionManager, "ISelectionMgr")
+    out = []
+    for ref in refs:
+        if ref.strip().lower() == "origin":
+            if not doc.Extension.SelectByID2("Point1@Origin", "EXTSKETCHPOINT", 0, 0, 0, True, mark, None, 0):
+                raise SwError("Could not select the sketch origin.")
+            out.append(None)
+        elif _SEG_RE.match(ref.strip()):
+            item = _sketch_item(sk, ref)
+            data = SW.cast(sm.CreateSelectData(), "ISelectData")
+            data.Mark = mark
+            if not item.Select4(True, data):
+                raise SwError(f"Could not select {ref}.")
+            out.append(item)
+        else:
+            out += [r.obj for r in g.select(doc, ref, mark=mark)]
+    return out
+
+
+def _pick_segment(doc: Any, sk: Any, at: list[float], to_model) -> bool:
+    """Select the segment under a sketch point the way a mouse pick does, which SketchTrim needs. The pick
+    uses a screen tolerance, so when it lands on a neighbouring segment the view is zoomed in and it is
+    retried. Returns True when the view was zoomed; zoom back out only after the trim."""
+    want = _sketch_item(sk, f"seg@{at[0]},{at[1]}")
+    p = to_model(at)
+    sel = SW.cast(doc.SelectionManager, "ISelectionMgr")
+    for zoom in (False, True):
+        if zoom:
+            h = 0.002
+            doc.ViewZoomTo2(p[0] - h, p[1] - h, p[2] - h, p[0] + h, p[1] + h, p[2] + h)
+        doc.ClearSelection2(True)
+        doc.Extension.SelectByID2("", "SKETCHSEGMENT", p[0], p[1], p[2], False, 0, None, 0)
+        got = sel.GetSelectedObject6(1, -1) if sel.GetSelectedObjectCount2(-1) else None
+        if got is not None and SW.app.IsSame(got, want) == 1:
+            return zoom
+    doc.ViewZoomtofit2()
+    doc.ClearSelection2(True)
+    raise SwError(f"Could not pick the segment at {at}; give a point further from other segments.")
+
+
+def _signature(sk: Any) -> list[str]:
+    return sorted(str({k: v for k, v in _seg_geom(s).items() if not k.startswith("_")}) for s in _segments(sk))
+
+
+@tool(READ_ONLY)
+def list_sketch(
+    sketch: Annotated[str | None, Field(description="Sketch name; default is the open sketch.")] = None,
+    near: Annotated[list[float] | None, Field(description="Sort by distance from this sketch point [x, y] (mm).")] = None,
+    limit: Annotated[int, Field(ge=1, le=500)] = 100,
+) -> dict:
+    """Segments and points of a sketch in sketch coordinates (mm), with the indices that modify_sketch
+    takes as 'seg:N' and 'pt:N'. Indices change after every edit; 'seg@x,y' and 'pt@x,y' do not."""
+    doc = SW.active()
+    if sketch:
+        f = g.feature_by_name(doc, sketch)
+        if f is None or f.GetTypeName2() not in ("ProfileFeature", "3DProfileFeature"):
+            raise SwError(f"'{sketch}' is not a sketch. Use list_features to see sketch names.")
+        sk = SW.cast(f.GetSpecificFeature2(), "ISketch")
+    else:
+        sk = active_sketch(doc)
+    segs = []
+    for i, s in enumerate(_segments(sk)):
+        info = _seg_geom(s)
+        row = {"i": i, **{k: v for k, v in info.items() if not k.startswith("_")}}
+        if near:
+            row["_d"] = _dist(info, (near[0], near[1]))
+        segs.append(row)
+    pts = [{"i": i, "at": [round(v, 4) + 0.0 for v in _xy(p)]} for i, p in enumerate(_points(sk))]
+    if near:
+        segs.sort(key=lambda r: r.pop("_d"))
+        pts.sort(key=lambda r: math.dist(r["at"], near[:2]))
+    return {"sketch": sketch or sketch_name(doc, sk), "status": sketch_status(sk), "segment_count": len(segs), "segments": segs[:limit],
+            "point_count": len(pts), "points": pts[:limit], **SketchFrame(sk).describe()}
+
+
+def _no_dim_prompt(fn):
+    """Run fn with the 'enter dimension value' dialog switched off."""
+    C = SW.C
+    old = SW.app.GetUserPreferenceToggle(C.swInputDimValOnCreate)
+    SW.app.SetUserPreferenceToggle(C.swInputDimValOnCreate, False)
+    try:
+        return fn()
+    finally:
+        SW.app.SetUserPreferenceToggle(C.swInputDimValOnCreate, old)
+
+
+def _dimension(doc: Any, sk: Any, op: dict, items: list[str], to_model) -> dict:
+    C = SW.C
+    if not items:
+        raise SwError("dimension needs items: one segment (length, diameter or radius) or two segments/points.")
+    _select_items(doc, sk, items)
+    at = op.get("at")
+    if at is None:  # beside the first item
+        info = _seg_geom(_sketch_item(sk, items[0])) if items[0].strip().lower().startswith("seg") else {}
+        base = info.get("center") or info.get("start") or [0, 0]
+        at = [base[0] + 5, base[1] + 5]
+    p = to_model(at)
+    orient = (op.get("orientation") or "aligned").lower()
+    add = {"aligned": doc.AddDimension2, "horizontal": doc.AddHorizontalDimension2, "vertical": doc.AddVerticalDimension2}.get(orient)
+    if add is None:
+        raise SwError("dimension orientation must be aligned, horizontal or vertical.")
+    dd = _no_dim_prompt(lambda: add(p[0], p[1], p[2]))
+    if dd is None:
+        raise SwError("SolidWorks could not dimension the selection.")
+    d = SW.cast(SW.cast(dd, "IDisplayDimension").GetDimension2(0), "IDimension")
+    name = "@".join(d.FullName.split("@")[:2])
+    angular = d.GetType() == C.swDimensionParamTypeDoubleAngular
+    if op.get("value") is not None:
+        v = float(op["value"])
+        r = d.SetSystemValue3(math.radians(v) if angular else mm(v), C.swSetValue_InThisConfiguration, None)
+        if r not in (0, None):
+            raise SwError(f"SolidWorks rejected {name} = {v}: it would over-define the sketch or is a driven dimension.")
+    val = d.GetSystemValue3(C.swThisConfiguration, None)
+    val = val[0] if isinstance(val, (tuple, list)) else val
+    return {"dimension": name, "value": round(math.degrees(val), 6) if angular else to_mm(val), "unit": "deg" if angular else "mm"}
+
+
+def _op(doc: Any, sk: Any, op: dict) -> dict:
+    C = SW.C
+    sm = doc.SketchManager
+    kind = (op.get("op") or "").lower()
+    items = op.get("items") or []
+    if isinstance(items, str):
+        items = [items]
+    frame = SketchFrame(sk)
+    to_model = lambda xy: frame.to_model([mm(xy[0]), mm(xy[1]), 0.0])  # noqa: E731
+    out: dict[str, Any] = {"op": kind}
+    doc.ClearSelection2(True)
+    n = len(_segments(sk))
+
+    if kind == "delete":
+        _select_items(doc, sk, items)
+        if not doc.Extension.DeleteSelection2(0):
+            raise SwError("SolidWorks could not delete the selection.")
+    elif kind in ("move", "copy"):
+        by = op.get("by") or [0, 0]
+        _select_items(doc, sk, items)
+        doc.Extension.MoveOrCopy(kind == "copy", int(op.get("count", 1)), bool(op.get("keep_relations", False)), 0, 0, 0, mm(by[0]), mm(by[1]), 0)
+    elif kind == "rotate":
+        c = op.get("center") or [0, 0]
+        _select_items(doc, sk, items)
+        doc.Extension.RotateOrCopy(bool(op.get("copy", False)), int(op.get("count", 1)), bool(op.get("keep_relations", False)),
+                                   mm(c[0]), mm(c[1]), 0, 0, 0, 1, math.radians(float(op.get("angle", 0))))
+    elif kind == "trim":
+        at = op.get("at")
+        if not at:
+            raise SwError("trim needs at:[x, y], a point on the piece to remove.")
+        before = _signature(sk)
+        zoomed = _pick_segment(doc, sk, at, to_model)
+        # the pick point is in sketch coordinates here (SelectByID2 above took model coordinates);
+        # SketchTrim returns False even when it trims
+        sm.SketchTrim(C.swSketchTrimClosest, mm(at[0]), mm(at[1]), 0.0)
+        if zoomed:
+            doc.ViewZoomtofit2()
+        if _signature(sk) == before:
+            raise SwError(f"Nothing was trimmed at {at}. The point must lie on a segment.")
+    elif kind == "offset":
+        d = float(op.get("distance", 0))
+        if not d:
+            raise SwError("offset needs a non-zero distance (mm; the sign picks the side).")
+        _select_items(doc, sk, items)
+        if not sm.SketchOffset2(mm(d), bool(op.get("both_sides", False)), bool(op.get("chain", True)), 0, 0, False) or len(_segments(sk)) == n:
+            raise SwError("SolidWorks could not offset the selection; a smaller distance may work.")
+    elif kind == "convert":
+        refs = op.get("refs") or items
+        if not refs:
+            raise SwError("convert needs refs: model edges or faces ('edge@x,y,z', 'face:N') to project into the sketch.")
+        for r in refs:
+            g.select(doc, r)
+        if not sm.SketchUseEdge3(bool(op.get("chain", False)), bool(op.get("inner_loops", True))):
+            raise SwError("SolidWorks could not convert the selected entities.")
+    elif kind in ("fillet", "chamfer"):
+        _select_items(doc, sk, items)
+        if kind == "fillet":
+            r = sm.CreateFillet(mm(float(op.get("radius", 0))), C.swConstrainedCornerKeepGeometry)
+        else:
+            r = sm.CreateChamfer(C.swSketchChamfer_DistanceEqual, mm(float(op.get("distance", 0))), 0)
+        if r is None or len(_segments(sk)) == n:
+            raise SwError(f"SolidWorks could not add the sketch {kind}. Give corner points ('pt@x,y') where two segments meet.")
+    elif kind == "construction":
+        for it in _select_items(doc, sk, items):
+            if it is not None:
+                SW.cast(it, "ISketchSegment").ConstructionGeometry = bool(op.get("on", True))
+    elif kind == "relation":
+        rel = (op.get("type") or "").lower()
+        if rel not in RELATIONS:
+            raise SwError(f"Unknown relation '{rel}'. Use one of {', '.join(RELATIONS)}.")
+        _select_items(doc, sk, items)
+        rm = SW.cast(sk.RelationManager, "ISketchRelationManager")
+        before = rm.GetRelationsCount(C.swAll)
+        doc.SketchAddConstraints(RELATIONS[rel])
+        if rm.GetRelationsCount(C.swAll) == before:
+            raise SwError(f"SolidWorks did not add the {rel} relation; check that the items suit it and that it does not exist already.")
+    elif kind == "dimension":
+        out.update(_dimension(doc, sk, op, items, to_model))
+    else:
+        raise SwError(f"Unknown sketch operation '{kind}'. Use delete, move, copy, rotate, trim, offset, convert, fillet, chamfer, "
+                      "construction, relation or dimension.")
+    doc.ClearSelection2(True)
+    change = len(_segments(sk)) - n
+    if change > 0:
+        out["segments_added"] = change
+    elif change < 0:
+        out["segments_removed"] = -change
+    return out
+
+
+@tool(WRITES)
+def modify_sketch(
+    operations: Annotated[list[dict[str, Any]], Field(description=(
+        "Edits to the open sketch, applied in order. Items are 'seg:N' / 'pt:N' (indices from list_sketch, which change after "
+        "every edit) or 'seg@x,y' / 'pt@x,y' (the segment or point nearest that sketch point, mm), plus 'origin'. Operations: "
+        "{op:'delete', items}, {op:'move', items, by:[dx, dy]}, {op:'copy', items, by, count}, "
+        "{op:'rotate', items, center:[x, y], angle (deg, counterclockwise), copy}, "
+        "{op:'trim', at:[x, y]} (removes the piece of the segment under the point, up to the nearest intersections), "
+        "{op:'offset', items (sketch segments or model edges/faces), distance (mm; the sign picks the side), both_sides, chain}, "
+        "{op:'convert', refs:['edge@x,y,z' | 'face:N', ...]} (project model edges into the sketch), "
+        "{op:'fillet', items:['pt@x,y'], radius}, {op:'chamfer', items:['pt@x,y'], distance}, "
+        "{op:'construction', items, on}, "
+        "{op:'relation', type, items} (types: " + ", ".join(RELATIONS) + "), "
+        "{op:'dimension', items, value, orientation:'aligned'|'horizontal'|'vertical', at:[x, y]} "
+        "(one line: length; circle: diameter; arc: radius; two items: distance, or the angle between two lines in degrees)."))],
+) -> dict:
+    """Edit the open sketch: delete, move, copy, rotate, trim, offset, convert model edges, sketch fillets and
+    chamfers, construction geometry, relations and driving dimensions (their names work with set_dimensions)."""
+    doc = SW.active()
+    sk = active_sketch(doc)
+    done = []
+    for i, op in enumerate(operations):
+        try:
+            done.append(_op(doc, sk, op))
+        except SwError as err:
+            doc.ClearSelection2(True)
+            raise SwError(f"operations[{i}] ({op.get('op')}): {err}" + (f" Already applied: {done}" if done else "")) from None
+    doc.GraphicsRedraw2()
+    return {"sketch": sketch_name(doc, sk), "done": done, "status": sketch_status(sk), "segments": len(_segments(sk))}

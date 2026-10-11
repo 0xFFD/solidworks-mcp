@@ -3,6 +3,31 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Sketch editing: `list_sketch` lists the segments and points of a sketch, and `modify_sketch` trims, offsets,
+  converts model edges, adds sketch fillets and chamfers, relations and driving dimensions, and moves, rotates,
+  copies, deletes or toggles construction on individual entities. Sketch items are addressed as `seg:N`, `pt:N`,
+  `seg@x,y` or `pt@x,y`.
+- `edit_feature` redefines existing features: extrude and cut end conditions (blind, through all, mid plane,
+  up to next), depths, second direction and flip side; revolve angle; fillet radius and edges; chamfer distance;
+  shell thickness; pattern counts and spacing.
+- `configurations` lists, adds (including derived configurations), activates and deletes configurations, and
+  `set_dimensions` and `feature_action` take `configurations` to change only some of them.
+- `helix` creates helices and spirals from a sketched circle and reports the start point and tangent, so a
+  profile can be swept along it for springs, coils and modelled threads.
+- 3D sketches (`start_sketch(on="3d")`) with lines, polylines, splines and points in model coordinates, for
+  sweep paths, tube runs and harnesses.
+- Multibody parts: `list_bodies`, `combine` (add, subtract, common) and `move_body` (move, rotate, copy), and
+  `body:Name` references so linear and circular patterns and mirror can repeat bodies.
+- Sketch text takes a `font` and `bold`.
+
+### Fixed
+- `set_dimensions` treated unitless dimensions such as pattern instance counts as millimetres, so setting a
+  count of 6 set it to 0.006. `dimensions` now reports their unit as `count`.
+- `set_dimensions` no longer closes a sketch that is open for editing.
+
 ## [0.2.0] - 2026-10-11
 
 Design from a one-line request: an agent told "build an interceptor drone frame" can now plan and

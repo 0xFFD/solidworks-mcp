@@ -20,17 +20,22 @@ Typical part workflow:
    sketch X/Y map to model space. sketch(entities=[...]) adds lines, circles, arcs, rectangles, slots,
    polygons, splines, bolt circles, hole grids, NACA airfoils and engraved text in sketch coordinates
    (or model coordinates with coords="model"); polyline with radius draws any rounded outline and
-   mirror:'both' makes symmetric copies. edit_sketch reopens an existing sketch.
+   mirror:'both' makes symmetric copies. edit_sketch reopens an existing sketch; list_sketch and
+   modify_sketch trim, offset, convert edges, add relations and driving dimensions, move or delete items.
+   start_sketch(on="3d") opens a 3D sketch for sweep paths.
    finish_sketch(fully_define=true) closes it and reports whether it is fully defined.
 3. Features use the latest sketch unless one is named: extrude (boss or cut), revolve, sweep, loft, then
    fillet, chamfer, shell, hole (Hole Wizard: plain, counterbore, countersink, tapped, at exact
-   positions), draft, linear_pattern, circular_pattern, mirror, ref_plane, ref_axis, cosmetic_thread.
+   positions), draft, linear_pattern, circular_pattern, mirror, ref_plane, ref_axis, cosmetic_thread,
+   helix (springs, modelled threads). Multibody: list_bodies, combine, move_body, 'body:Name' references.
+   edit_feature changes an existing feature's end condition, depth, radius, thickness or pattern count.
 4. Pick faces and edges with list_faces / list_edges (indices change after every feature) or by point:
    "face@x,y,z", "edge@x,y,z". Planes: "plane:Front|Top|Right" or any plane name.
 5. Check the result: screenshot (returns an image), list_features (rebuild errors), mass_properties,
    bounding_box, check_geometry, measure. Fix with set_dimensions, feature_action, undo.
 6. Engineering data: set_material / list_materials, custom_properties (part number, revision,
-   export-control marking), equations, document_settings (units, ASME or ISO drafting standard),
+   export-control marking), equations, configurations (variants: set_dimensions and feature_action take
+   configurations=[...]), document_settings (units, ASME or ISO drafting standard),
    add_datum, add_geometric_tolerance and add_surface_finish (GD&T on model faces, carried into drawings).
 7. Output: save_document (native files), export (STEP AP242/AP214/AP203, IGES, Parasolid, STL, 3MF, PDF,
    DXF, DWG, PNG), create_drawing (standard views, model dimensions and GD&T), section_view, add_note.

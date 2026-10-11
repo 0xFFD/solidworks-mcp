@@ -151,3 +151,36 @@ def expand_mirror(e: dict) -> list[dict]:
     if copies is None:
         raise SwError("mirror must be 'left_right' (about the sketch Y axis), 'up_down' (about the X axis) or 'both'.")
     return [base] + [mirrored(base, sx, sy) for sx, sy in copies]
+
+
+# ---------------------------------------------------------------------------------------------- picking
+
+
+def dist_to_line(p: tuple[float, float], a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Distance from p to the segment a-b."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    ll = dx * dx + dy * dy
+    t = 0.0 if ll == 0 else max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / ll))
+    return math.dist(p, (a[0] + t * dx, a[1] + t * dy))
+
+
+def dist_to_arc(p: tuple[float, float], c: tuple[float, float], r: float, start: tuple[float, float] | None = None,
+                end: tuple[float, float] | None = None, ccw: bool = True) -> float:
+    """Distance from p to a circle, or to the arc from start to end (counterclockwise unless ccw is False)."""
+    if start is None or end is None or math.dist(start, end) < 1e-12:
+        return abs(math.dist(p, c) - r)
+    a0 = math.atan2(start[1] - c[1], start[0] - c[0])
+    a1 = math.atan2(end[1] - c[1], end[0] - c[0])
+    ap = math.atan2(p[1] - c[1], p[0] - c[0])
+    if not ccw:
+        a0, a1 = a1, a0
+    sweep = (a1 - a0) % (2 * math.pi)
+    if (ap - a0) % (2 * math.pi) <= sweep:
+        return abs(math.dist(p, c) - r)
+    return min(math.dist(p, start), math.dist(p, end))
+
+
+def dist_to_polyline(p: tuple[float, float], pts: list[tuple[float, float]]) -> float:
+    if len(pts) == 1:
+        return math.dist(p, pts[0])
+    return min(dist_to_line(p, pts[i], pts[i + 1]) for i in range(len(pts) - 1))

@@ -41,11 +41,11 @@ The existing servers cover a few sketch and extrude calls, are written against o
 
 | | solidworks-mcp |
 |---|---|
-| Modelling | Sketches with exact coordinates in sketch or model space, extrude, revolve, sweep (including round sections along a path), loft, fillet, chamfer, shell, draft, linear and circular patterns, mirror, reference planes and axes |
+| Modelling | 2D and 3D sketches with exact coordinates in sketch or model space, sketch editing (trim, offset, convert edges, relations, driving dimensions, move, rotate, copy, delete), extrude, revolve, sweep (including round sections along a path), helices and spirals for springs and modelled threads, loft, fillet, chamfer, shell, draft, linear and circular patterns of features or bodies, mirror, multibody combine and move/copy, reference planes and axes |
 | Holes | Hole Wizard plain, counterbore, countersink (including 100 degree aerospace countersinks) and tapped holes from ISO, ANSI metric and ANSI inch tables, with every centre placed exactly where you ask |
 | GD&T and MBD | Datums, feature control frames (all 14 characteristics, diameter zones, MMC and LMC on tolerances and datums), surface finish symbols and cosmetic threads on the model, carried into drawings and STEP |
 | Drawings | Standard three views plus isometric in first or third angle projection, model dimensions, hole callouts and GD&T imported, section views, notes, PDF and DWG export. Drawings take the part's units and drafting standard |
-| Engineering data | Materials from the SolidWorks databases (with density, yield and modulus) plus a bundled database of generic CFRP, aramid, G10/FR4 and engineering polymer grades, custom properties for part number, revision and markings, equations and global variables, ASME or ISO drafting standard |
+| Engineering data | Materials from the SolidWorks databases (with density, yield and modulus) plus a bundled database of generic CFRP, aramid, G10/FR4 and engineering polymer grades, custom properties for part number, revision and markings, equations and global variables, configurations (part variants with their own dimensions and suppressed features), ASME or ISO drafting standard |
 | Design knowledge | `design_guide` with workflows, multirotor and fixed-wing sizing, standard mounting patterns, ISO 273 clearances, tap drills, edge distances, machining, composite and additive rules, quick stiffness checks and release checks |
 | Checks | Mass, centre of mass and inertia tensor, bounding box, body fault check, rebuild errors, measurement, interference detection, and screenshots returned as images |
 | Picking geometry | `list_faces` and `list_edges` describe every face and edge (type, outward normal, radius, axis, hole or boss, a point on it), and any entity can be picked by index or by a point near it: `face@50,0,0` |
@@ -105,16 +105,17 @@ All lengths are millimetres and all angles degrees, in both directions, whatever
 |---|---|
 | Design knowledge | `design_guide` (workflow, multirotor, fixed_wing, fasteners, structures, materials, release) |
 | Session and files | `sw_info`, `new_document`, `open_document`, `import_file` (STEP, IGES, Parasolid, ACIS, STL, 3MF), `activate_document`, `save_document`, `export`, `close_document`, `document_settings` |
-| Sketching | `start_sketch`, `edit_sketch`, `sketch` (line, centerline, polyline with corner radii, rectangle, center rectangle, rounded rectangle, circle, bolt circle, circle grid, arc, ellipse, polygon, slot, point, spline, NACA airfoil, engraved text, construction geometry, mirrored copies), `finish_sketch` (optionally fully defined with dimensions) |
-| Features | `extrude`, `revolve`, `sweep`, `loft`, `fillet`, `chamfer`, `shell`, `draft`, `hole`, `cosmetic_thread`, `linear_pattern`, `circular_pattern`, `mirror`, `ref_plane`, `ref_axis` |
-| Model tree and edits | `list_features`, `dimensions`, `set_dimensions`, `equations`, `feature_action` (suppress, unsuppress, delete), `undo`, `rebuild` |
+| Sketching | `start_sketch` (on a plane or face, or a 3D sketch), `edit_sketch`, `sketch` (line, centerline, polyline with corner radii, rectangle, center rectangle, rounded rectangle, circle, bolt circle, circle grid, arc, ellipse, polygon, slot, point, spline, NACA airfoil, engraved text in any font, construction geometry, mirrored copies), `list_sketch`, `modify_sketch` (trim, offset, convert model edges, sketch fillet and chamfer, relations, driving dimensions, move, rotate, copy, delete, construction), `finish_sketch` (optionally fully defined with dimensions) |
+| Features | `extrude`, `revolve`, `sweep`, `helix`, `loft`, `fillet`, `chamfer`, `shell`, `draft`, `hole`, `cosmetic_thread`, `linear_pattern`, `circular_pattern`, `mirror`, `ref_plane`, `ref_axis` |
+| Multibody | `list_bodies`, `combine` (add, subtract, common), `move_body` (move, rotate, copy) |
+| Model tree and edits | `list_features`, `dimensions`, `set_dimensions`, `edit_feature` (end conditions, depths, directions, radii, thickness, pattern counts), `configurations`, `equations`, `feature_action` (suppress, unsuppress, delete; per configuration), `undo`, `rebuild` |
 | Geometry and checks | `list_faces`, `list_edges`, `measure`, `mass_properties`, `bounding_box`, `check_geometry`, `screenshot` |
 | Engineering data | `list_materials`, `set_material`, `custom_properties` |
 | GD&T | `add_datum`, `add_geometric_tolerance`, `add_surface_finish`, `add_note` |
 | Drawings | `create_drawing`, `drawing_views`, `section_view` |
 | Assemblies | `insert_component`, `list_components`, `add_mate`, `interference_check`, `bom` (parts list with mass budget) |
 
-58 tools and one prompt (`design`) in total. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`) so clients can approve reads automatically and ask before deleting or closing.
+66 tools and one prompt (`design`) in total. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`) so clients can approve reads automatically and ask before deleting or closing.
 
 ### Picking faces and edges
 
@@ -127,6 +128,8 @@ Features need faces, edges and planes, and the model cannot click on the screen.
 | `face:Bracket-1/7`, `face@Bracket-1/0,22,0` | The same, on an assembly component |
 | `plane:Front`, `plane:Top`, `plane:Right` | The default planes, whatever they are called in your template |
 | `plane:Plane1`, `axis:Axis1`, `sketch:Sketch2`, `feature:Boss-Extrude1`, `comp:Bracket-1` | Anything in the feature tree by name |
+| `body:Boss-Extrude2` | A solid body of a multibody part, by the name `list_bodies` reports |
+| `seg:4`, `pt:2`, `seg@12,5`, `pt@17,7` | Inside the open sketch (`modify_sketch`): a segment or point by `list_sketch` index, or the one nearest a sketch point (mm) |
 
 `start_sketch` reports how the sketch axes map into model space (on the Top plane, sketch +Y is model -Z), and `sketch(coords="model")` takes points in model coordinates directly, so the model never has to work that out itself.
 
@@ -160,7 +163,7 @@ Copy the log to write-once storage if you need it to survive a determined admini
 
 **Read-only mode.** `--read-only` allows only the tools that do not change models or files, for design reviews and audits.
 
-**No code execution.** There is no tool that runs macros, scripts or arbitrary API calls. Everything the agent can do is one of the 58 tools above.
+**No code execution.** There is no tool that runs macros, scripts or arbitrary API calls. Everything the agent can do is one of the 66 tools above.
 
 **Engineering standards.** `document_settings` switches between ASME Y14.5 and ISO drafting standards, `create_drawing` supports third and first angle projection, GD&T is applied to model faces (model-based definition), holes come from the standard Hole Wizard tables rather than hand-drawn circles, `finish_sketch(fully_define=true)` produces fully defined sketches, and `check_geometry` runs the SolidWorks body check before release.
 
@@ -170,11 +173,11 @@ Copy the log to write-once storage if you need it to survive a determined admini
 
 The tools cover the common path from a blank part to a released drawing. Plenty of SolidWorks is not exposed yet, and an agent cannot do the following:
 
-- **Other modelling environments.** Sheet metal, weldments, surface modelling, mould tools, routing and 3D sketches are not available. Sweeps follow 2D sketches or existing edges, so there are no helices, springs or modelled threads (cosmetic threads only).
-- **Editing what already exists.** Driving dimensions can be changed, features can be suppressed, deleted or undone, and `edit_sketch` adds geometry to an existing sketch. Sketch entities cannot be moved or deleted individually, and a feature's definition cannot be changed (for example, turning a blind extrude into a through-all one) without deleting it and building it again.
-- **Detailed sketch work.** There is no trim, offset, convert entities, or adding individual relations and dimensions. Sketches are either left as drawn or fully defined automatically. Engraved text uses the default sketch font, placed one character at a time.
-- **Advanced features.** Fillets are constant radius only (no variable, face or full round fillets). Patterns repeat features, not bodies, and there are no sketch, curve or table driven patterns. Holes go on planar faces, one face per call. There are no multibody tools such as combine or split.
-- **Configurations and design tables.** Equations and global variables work. Configurations and design tables do not.
+- **Other modelling environments.** Sheet metal, weldments, surface modelling, mould tools and routing are not available. 3D sketches hold lines, splines and points only (no 3D arcs or relations).
+- **Editing what already exists.** `edit_feature` redefines extrudes, cuts, revolves, fillets, chamfers, shells and patterns. Sweeps, lofts, drafts, Hole Wizard holes and reference geometry still have to be deleted and built again to change anything other than their dimensions.
+- **Detailed sketch work.** There is no extend, split, sketch pattern, sketch block or spline editing. Engraved text is placed one character at a time.
+- **Advanced features.** Fillets are constant radius only (no variable, face or full round fillets). There are no sketch, curve or table driven patterns. Holes go on planar faces, one face per call. Bodies can be combined, moved and copied, but not split.
+- **Design tables.** Equations, global variables and configurations work, but there are no Excel design tables, and custom properties and materials apply to the whole part rather than per configuration.
 - **Imported geometry.** `import_file` brings STEP, IGES and Parasolid models in as dumb solids: there is no feature recognition, so imported parts can be referenced, measured and mated but not edited by dimension.
 - **Design judgement.** The guide gives rules of thumb and a worked recipe, not analysis. Strength, vibration, thermal and airworthiness decisions stay with engineers.
 - **Drawings beyond the basics.** The agent gets standard views, an isometric, full section views and notes. It cannot add detail, auxiliary or broken views, BOMs, hole tables or revision tables, place individual drawing dimensions, edit the title block (other than through custom properties) or add sheets. Imported annotations often overlap and need tidying by hand.
