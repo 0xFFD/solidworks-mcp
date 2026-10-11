@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from mcp.server.mcpserver import MCPServer
 
-from . import __version__, tools_assembly, tools_doc, tools_drawing, tools_features, tools_guide, tools_inspect, tools_sketch  # noqa: F401
+from . import (  # noqa: F401
+    __version__,
+    tools_assembly,
+    tools_doc,
+    tools_drawing,
+    tools_features,
+    tools_guide,
+    tools_inspect,
+    tools_sheetmetal,
+    tools_sketch,
+)
 from .registry import TOOLS, app, configure  # noqa: F401
 
 INSTRUCTIONS = """\
@@ -29,6 +39,8 @@ Typical part workflow:
    positions), draft, linear_pattern, circular_pattern, mirror, ref_plane, ref_axis, cosmetic_thread,
    helix (springs, modelled threads). Multibody: list_bodies, combine, move_body, 'body:Name' references.
    edit_feature changes an existing feature's end condition, depth, radius, thickness or pattern count.
+   Sheet metal: sheet_metal_base (closed outline or open profile), edge_flange, flat_pattern (blank size,
+   flatten, DXF export); design_guide('sheet_metal') has bend radii and a tray recipe.
 4. Pick faces and edges with list_faces / list_edges (indices change after every feature) or by point:
    "face@x,y,z", "edge@x,y,z". Planes: "plane:Front|Top|Right" or any plane name.
 5. Check the result: screenshot (returns an image), list_features (rebuild errors), mass_properties,

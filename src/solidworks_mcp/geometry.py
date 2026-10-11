@@ -164,6 +164,23 @@ def face_info(face: Any, index: int, xf: Placement | None = None) -> dict:
     return info
 
 
+def _edge_mid(edge: Any, curve: Any, u0: float, u1: float, start: list[float], end: list[float], line: bool) -> list[float]:
+    """A point halfway along the edge. The underlying curve can be parameterised against the edge's own
+    direction, so the curve's mid parameter may land off the edge; such a point is rejected."""
+    if line:
+        return [(a + b) / 2 for a, b in zip(start, end)]
+    for evaluate in (lambda: curve.Evaluate2((u0 + u1) / 2, 0), lambda: edge.Evaluate2((u0 + u1) / 2, 0)):
+        try:
+            p = list(evaluate())[:3]
+        except Exception:
+            continue
+        q = edge.GetClosestPointOn(*p)
+        if q is not None and math.dist(p, list(q)[:3]) < 1e-8:
+            return p
+    q = edge.GetClosestPointOn(*[(a + b) / 2 for a, b in zip(start, end)])
+    return list(q)[:3] if q is not None else start
+
+
 def edge_info(edge: Any, index: int, xf: Placement | None = None) -> dict:
     """Describe an edge; with `xf` (an assembly component) coordinates are in assembly space."""
     P = (lambda v: _pt(xf.point(v))) if xf else _pt  # noqa: E731
@@ -190,8 +207,7 @@ def edge_info(edge: Any, index: int, xf: Placement | None = None) -> dict:
         info["length"] = _r(to_mm(curve.GetLength3(u0, u1)))
     except Exception:
         pass
-    mid = curve.Evaluate2((u0 + u1) / 2, 0)
-    info["mid"] = P(mid)
+    info["mid"] = P(_edge_mid(edge, curve, u0, u1, start, end, info["type"] == "line"))
     if info["type"] in ("line", "arc", "spline", "ellipse"):
         info["start"] = P(start)
         info["end"] = P(end)

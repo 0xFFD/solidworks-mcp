@@ -289,6 +289,59 @@ def test_sketch_and_feature_editing(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_sheet_metal(tmp_path: Path):
+    """An avionics-tray style sheet metal part: base flange, edge flanges, flat pattern and DXF blank."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-50, -30], "corner2": [50, 30]}])
+            await c.call("finish_sketch")
+            base = await c.call("sheet_metal_base", thickness=1.6, bend_radius=1.6)
+            assert base["volume_mm3"] == pytest.approx(100 * 60 * 1.6)
+            # every reported edge midpoint lies on its edge, so it can be used as a reference
+            for e in (await c.call("list_edges", limit=50))["edges"]:
+                assert (await c.call("measure", refs=["edge@{},{},{}".format(*e["mid"])]))["length_mm"] == pytest.approx(e["length"], abs=1e-3)
+            await c.call("edge_flange", edges=["edge@0,0,30", "edge@0,0,-30"], length=15)
+            await c.call("edge_flange", edges=["edge@50,0,0", "edge@-50,0,0"], length=15)
+            info = await c.call("flat_pattern")
+            assert info["bends"] == 4 and info["state"] == "formed"
+            # outer size 100 x 60 kept (material inside); each side adds 15 - r straight plus the bend allowance
+            ba = 3.14159265 / 2 * (1.6 + info["default_k_factor"] * 1.6)
+            assert info["flat_size_mm"] == pytest.approx([100 - 2 * 3.2 + 2 * (ba + 13.4), 60 - 2 * 3.2 + 2 * (ba + 13.4)], abs=0.01)
+            assert "Save the part" in await c.fails("flat_pattern", export="tray.dxf")
+            await c.call("custom_properties", set={"ExportControl": "TEST DATA"})
+            await c.call("save_document", path="tray.sldprt")
+            flat = await c.call("flat_pattern", action="flatten", export="tray.dxf")
+            assert flat["state"] == "flat" and flat["exported"]["bytes"] > 1000 and flat["marking"] == "TEST DATA"
+            assert (await c.call("bounding_box"))["size"][1] == pytest.approx(1.6)
+            await c.call("flat_pattern", action="fold")
+
+            # a 45 degree lip with its own K-factor, and an open hat section
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-40, -20], "corner2": [40, 20]}])
+            await c.call("finish_sketch")
+            await c.call("sheet_metal_base", thickness=1.0, bend_radius=1.0)
+            lip = await c.call("edge_flange", edges=["edge@0,0,20"], length=10, angle=45, k_factor=0.4)
+            assert "rebuild" not in lip
+            assert (await c.call("bounding_box"))["max"][1] == pytest.approx(10 * 0.70710678, abs=0.01)
+            await c.call("close_document")
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "polyline", "points": [[-30, 0], [-15, 0], [-15, 20], [15, 20], [15, 0], [30, 0]]}])
+            await c.call("finish_sketch")
+            await c.call("sheet_metal_base", thickness=1.2, bend_radius=2, depth=200)
+            hat = await c.call("flat_pattern")
+            assert hat["bends"] == 4 and hat["flat_size_mm"][0] == pytest.approx(200)
+            await c.call("close_document")
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

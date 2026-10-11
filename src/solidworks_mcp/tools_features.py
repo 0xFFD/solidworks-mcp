@@ -34,8 +34,15 @@ def feature_error(f: Any) -> str | None:
 
 
 def _last_feature(doc: Any) -> Any:
-    f = doc.FeatureByPositionReverse(0)
-    return SW.cast(f, "IFeature") if f is not None else None
+    """Newest feature in the tree. Sheet metal parts keep their flat pattern last, so it is skipped."""
+    for i in range(3):
+        f = doc.FeatureByPositionReverse(i)
+        if f is None:
+            return None
+        f = SW.cast(f, "IFeature")
+        if f.GetTypeName2() != "FlatPattern":
+            return f
+    return None
 
 
 def _volume(doc: Any) -> float | None:

@@ -86,6 +86,17 @@ def marking(doc) -> str:
         return ""
 
 
+def checked_marking(doc) -> str:
+    """The document's export-control marking; raises when the server requires one and it is missing."""
+    mark = marking(doc)
+    if app().settings.require_marking and not mark:
+        raise SwError(
+            f"Export blocked: the document has no '{app().settings.marking_property}' custom property, and the server requires an "
+            "export-control marking before data leaves SolidWorks. Set it with custom_properties."
+        )
+    return mark
+
+
 @tool(READ_ONLY)
 def sw_info() -> dict:
     """SolidWorks version, server settings and the open documents (the active one first)."""
@@ -255,12 +266,7 @@ def export(
         raise SwError(f"Unsupported export format '{sfx}'. Supported: {', '.join(sorted(EXPORTS))}.")
     if kind not in EXPORTS[sfx]:
         raise SwError(f"A {kind} cannot be exported to {sfx}.")
-    mark = marking(doc)
-    if a.settings.require_marking and not mark and sfx not in (".png", ".jpg", ".tif"):
-        raise SwError(
-            f"Export blocked: the document has no '{a.settings.marking_property}' custom property, and the server requires an "
-            "export-control marking before data leaves SolidWorks. Set it with custom_properties."
-        )
+    mark = marking(doc) if sfx in (".png", ".jpg", ".tif") else checked_marking(doc)
     sw, C = SW.app, SW.C
     ext = SW.cast(doc.Extension, "IModelDocExtension")
     doc.ClearSelection2(True)  # a selection would limit some exports to the selected entities

@@ -22,11 +22,22 @@ All notable changes to this project are documented here. The format follows
 - Multibody parts: `list_bodies`, `combine` (add, subtract, common) and `move_body` (move, rotate, copy), and
   `body:Name` references so linear and circular patterns and mirror can repeat bodies.
 - Sketch text takes a `font` and `bold`.
+- Sheet metal: `sheet_metal_base` (flat blanks from closed outlines, formed sections from open profiles),
+  `edge_flange` (any angle, bend position, radius and K-factor; the flange profile is generated from the
+  edge) and `flat_pattern` (thickness, radius, K-factor, bend count and flat blank size; flatten and fold;
+  DXF/DWG export of the blank with bend lines, subject to the export-control marking check).
+- `design_guide('sheet_metal')`: bend radii for 5052, 6061, 2024 and 7075 aluminium, stainless and
+  titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
 - `set_dimensions` treated unitless dimensions such as pattern instance counts as millimetres, so setting a
   count of 6 set it to 0.006. `dimensions` now reports their unit as `count`.
 - `set_dimensions` no longer closes a sketch that is open for editing.
+- `list_edges` could report a `mid` point off the edge when the edge runs against its curve's
+  parameter direction, so `edge@` references built from it failed. Every reported midpoint now lies on
+  its edge.
+- Features created in sheet metal parts were not found after creation (the flat pattern stays last in
+  the tree), which made `ref_plane`, `shell`, `ref_axis` and `loft` report failure there.
 
 ## [0.2.0] - 2026-10-11
 

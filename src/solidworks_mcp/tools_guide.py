@@ -248,6 +248,41 @@ The '(generic)' materials come with this server: approximate properties good eno
 budgets and early sizing, not for qualification. Replace them with supplier data for release.
 """
 
+GUIDES["sheet_metal"] = """\
+SHEET METAL (avionics trays, chassis, covers, brackets, clips, ribs)
+Preliminary rules of thumb; the shop's bend tables and the material specification govern.
+
+MATERIALS AND MINIMUM INSIDE BEND RADIUS (multiples of thickness t, 90 degree bends)
+- 5052-H32 aluminium: 0.5-1 t. Easy to form, not heat treatable; covers, trays, enclosures.
+- 6061-T6: about 1.5-3 t (bend 6061-T4 or O tighter, then age). General brackets.
+- 2024-T3: about 2.5-4 t. Aerospace skins, ribs and clips; fatigue-critical parts.
+- 7075-T6: about 5-9 t and prone to cracking; form in the O or W temper and heat treat, or machine instead.
+- 300-series stainless (annealed): 0.5-1 t. Ti-6Al-4V (annealed): about 3-5 t cold, often hot formed.
+- Bend across the rolling direction when the radius is near the minimum.
+K-FACTOR: about 0.33 for radii below t, 0.40-0.45 for 1-3 t, 0.5 for large radii. SolidWorks uses its
+default (0.5) for the base flange bends; pass k_factor to edge_flange for its bends, and check the
+flat size from flat_pattern against the shop's bend allowance before release.
+
+GEOMETRY RULES
+- Flange length at least 4 t (shorter flanges do not form cleanly in a press brake).
+- Holes and slots at least 2.5 t + r from a bend (measured to the hole edge), or they distort.
+- Hole diameter at least t; hole edge to sheet edge at least 2 x hole diameter (see fasteners).
+- Keep one bend radius and one thickness per part. Relief cuts where a bend runs into an edge are
+  added by SolidWorks; adjacent flanges at different angles can collide at the corner (rebuild
+  warning, flat pattern fails): leave a gap or use the same angle.
+
+RECIPE: AVIONICS TRAY
+1. start_sketch('plane:Top'); sketch rectangle of the outer footprint; finish_sketch.
+2. sheet_metal_base(thickness=1.6, bend_radius=1.6) (5052-H32 or 6061-T6).
+3. edge_flange(edges=['edge@0,0,W/2', 'edge@0,0,-W/2'], length=H) then the two short sides; the
+   flange rises on the side of the face the edge belongs to.
+4. Mounting holes with hole(...) on the floor and flanges (keep them 2.5 t + r from the bends).
+5. set_material, custom_properties; flat_pattern() to read the blank size and bend count.
+6. save_document, then flat_pattern(export='part_flat.dxf') for laser or punch programming.
+Open sections (L brackets, U channels, hat stiffeners): sketch the open profile on a plane and use
+sheet_metal_base(..., depth=length).
+"""
+
 GUIDES["release"] = """\
 BEFORE CALLING A PART DONE
 - check_geometry ok, list_features without rebuild errors, sketches fully defined where practical.
@@ -263,16 +298,17 @@ BEFORE CALLING A PART DONE
 - Tell the user what an engineer still has to verify.
 """
 
-TOPICS = ("workflow", "multirotor", "fixed_wing", "fasteners", "structures", "materials", "release")
+TOPICS = ("workflow", "multirotor", "fixed_wing", "fasteners", "structures", "sheet_metal", "materials", "release")
 
 
 @tool(READ_ONLY)
 def design_guide(
-    topic: Annotated[Literal["workflow", "multirotor", "fixed_wing", "fasteners", "structures", "materials", "release", "all"], Field(description=(
+    topic: Annotated[Literal["workflow", "multirotor", "fixed_wing", "fasteners", "structures", "sheet_metal", "materials", "release", "all"], Field(description=(
         "workflow: how to approach any design request with these tools; multirotor: drone frames incl. sizing, "
         "mounting patterns and a step by step recipe; fixed_wing: wings, fins, fuselages with airfoils and lofts; "
         "fasteners: clearance and tap sizes, edge distances; structures: machining, composite and additive rules and "
-        "quick strength checks; materials: which material names to use; release: checks before a part is done."))] = "workflow",
+        "quick strength checks; sheet_metal: bend radii, K-factors and a tray recipe; materials: which material names to use; "
+        "release: checks before a part is done."))] = "workflow",
 ) -> str:
     """Engineering guidance and step-by-step recipes for designing aerospace and defence hardware with
     this server. Call it first when asked to design something (for example "build an interceptor
