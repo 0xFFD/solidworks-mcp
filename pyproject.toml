@@ -1,0 +1,58 @@
+[project]
+name = "solidworks-mcp"
+version = "0.2.0"
+description = "Model Context Protocol server for SolidWorks: parts, features, GD&T, drawings and assemblies from any MCP client, with an audit trail."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "0xFFD" }]
+requires-python = ">=3.10"
+keywords = ["solidworks", "cad", "mcp", "model-context-protocol", "llm", "gd&t", "aerospace"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Manufacturing",
+    "Intended Audience :: Science/Research",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+]
+dependencies = [
+    "mcp>=2.0,<3",
+    "pywin32>=306; sys_platform == 'win32'",
+    "pillow>=9",
+    "tomlkit>=0.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/0xFFD/solidworks-mcp"
+Repository = "https://github.com/0xFFD/solidworks-mcp"
+Issues = "https://github.com/0xFFD/solidworks-mcp/issues"
+Changelog = "https://github.com/0xFFD/solidworks-mcp/blob/main/CHANGELOG.md"
+
+[project.scripts]
+solidworks-mcp = "solidworks_mcp.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/solidworks_mcp"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["docs/images", ".github", "uv.lock"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: drives a real SolidWorks session (skipped when SolidWorks is not available)"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP"]
+ignore = ["E731", "E501", "B905"]  # long tool-description strings are intentional; zips are over equal-length lists

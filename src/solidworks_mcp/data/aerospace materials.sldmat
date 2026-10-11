@@ -1,0 +1,254 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mstns:materials xmlns:mstns="http://www.solidworks.com/sldmaterials" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata" xmlns:sldcolorswatch="http://www.solidworks.com/sldcolorswatch" version="2008.03">
+  <curves id="curve0">
+    <point x="1.0" y="1.0" />
+    <point x="2.0" y="1.0" />
+    <point x="3.0" y="1.0" />
+  </curves>
+  <classification name="Composites (generic)">
+    <material name="CFRP plate quasi-isotropic (generic)" matid="9001">
+      <swatchcolor RGB="1a1a1a">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="5.0000E+10" />
+        <NUXY displayname="Poisson's Ratio" value="0.3" />
+        <GXY displayname="Shear Modulus" value="1.9000E+10" />
+        <DENS displayname="Density" value="1.5500E+03" />
+        <KX displayname="Thermal Conductivity" value="5.0" />
+        <C displayname="Specific Heat" value="1.1000E+03" />
+        <SIGXT displayname="Tensile Strength" value="5.5000E+08" />
+      </physicalproperties>
+    </material>
+    <material name="CFRP unidirectional 0 deg T700-epoxy (generic)" matid="9002">
+      <swatchcolor RGB="1a1a1a">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="1.2500E+11" />
+        <NUXY displayname="Poisson's Ratio" value="0.3" />
+        <GXY displayname="Shear Modulus" value="4.4000E+09" />
+        <DENS displayname="Density" value="1.5500E+03" />
+        <KX displayname="Thermal Conductivity" value="5.0" />
+        <C displayname="Specific Heat" value="1.1000E+03" />
+        <SIGXT displayname="Tensile Strength" value="2.0000E+09" />
+      </physicalproperties>
+    </material>
+    <material name="CFRP woven 0-90 twill (generic)" matid="9003">
+      <swatchcolor RGB="202020">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="6.0000E+10" />
+        <NUXY displayname="Poisson's Ratio" value="0.05" />
+        <GXY displayname="Shear Modulus" value="4.0000E+09" />
+        <DENS displayname="Density" value="1.5500E+03" />
+        <KX displayname="Thermal Conductivity" value="5.0" />
+        <C displayname="Specific Heat" value="1.1000E+03" />
+        <SIGXT displayname="Tensile Strength" value="6.0000E+08" />
+      </physicalproperties>
+    </material>
+    <material name="Aramid-epoxy laminate (generic)" matid="9004">
+      <swatchcolor RGB="c9b037">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="3.0000E+10" />
+        <NUXY displayname="Poisson's Ratio" value="0.2" />
+        <GXY displayname="Shear Modulus" value="2.0000E+09" />
+        <DENS displayname="Density" value="1.3800E+03" />
+        <KX displayname="Thermal Conductivity" value="0.3" />
+        <C displayname="Specific Heat" value="1.4000E+03" />
+        <SIGXT displayname="Tensile Strength" value="5.0000E+08" />
+      </physicalproperties>
+    </material>
+    <material name="G10-FR4 glass-epoxy (generic)" matid="9005">
+      <swatchcolor RGB="c8d2a0">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="1.8000E+10" />
+        <NUXY displayname="Poisson's Ratio" value="0.12" />
+        <GXY displayname="Shear Modulus" value="8.0000E+09" />
+        <DENS displayname="Density" value="1.8500E+03" />
+        <KX displayname="Thermal Conductivity" value="0.3" />
+        <C displayname="Specific Heat" value="1.1500E+03" />
+        <SIGXT displayname="Tensile Strength" value="3.0000E+08" />
+      </physicalproperties>
+    </material>
+  </classification>
+  <classification name="Engineering polymers (generic)">
+    <material name="PA12 SLS (generic)" matid="9006">
+      <swatchcolor RGB="e6e6e6">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="1.7000E+09" />
+        <NUXY displayname="Poisson's Ratio" value="0.39" />
+        <GXY displayname="Shear Modulus" value="6.1000E+08" />
+        <DENS displayname="Density" value="1.0100E+03" />
+        <KX displayname="Thermal Conductivity" value="0.22" />
+        <C displayname="Specific Heat" value="1.7000E+03" />
+        <SIGXT displayname="Tensile Strength" value="4.8000E+07" />
+      </physicalproperties>
+    </material>
+    <material name="PA12-CF FDM (generic)" matid="9007">
+      <swatchcolor RGB="303030">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="5.0000E+09" />
+        <NUXY displayname="Poisson's Ratio" value="0.35" />
+        <GXY displayname="Shear Modulus" value="1.9000E+09" />
+        <DENS displayname="Density" value="1.1500E+03" />
+        <KX displayname="Thermal Conductivity" value="0.3" />
+        <C displayname="Specific Heat" value="1.5000E+03" />
+        <SIGXT displayname="Tensile Strength" value="7.0000E+07" />
+      </physicalproperties>
+    </material>
+    <material name="PETG (generic)" matid="9008">
+      <swatchcolor RGB="8fb3c8">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="2.1000E+09" />
+        <NUXY displayname="Poisson's Ratio" value="0.38" />
+        <GXY displayname="Shear Modulus" value="7.6000E+08" />
+        <DENS displayname="Density" value="1.2700E+03" />
+        <KX displayname="Thermal Conductivity" value="0.2" />
+        <C displayname="Specific Heat" value="1.2000E+03" />
+        <SIGXT displayname="Tensile Strength" value="5.0000E+07" />
+      </physicalproperties>
+    </material>
+    <material name="PEEK-CF30 (generic)" matid="9009">
+      <swatchcolor RGB="3a3a3a">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="1.3000E+10" />
+        <NUXY displayname="Poisson's Ratio" value="0.38" />
+        <GXY displayname="Shear Modulus" value="4.7000E+09" />
+        <DENS displayname="Density" value="1.4100E+03" />
+        <KX displayname="Thermal Conductivity" value="0.9" />
+        <C displayname="Specific Heat" value="1.0000E+03" />
+        <SIGXT displayname="Tensile Strength" value="2.0000E+08" />
+      </physicalproperties>
+    </material>
+    <material name="Polycarbonate (generic)" matid="9010">
+      <swatchcolor RGB="dcdcf0">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="2.3000E+09" />
+        <NUXY displayname="Poisson's Ratio" value="0.37" />
+        <GXY displayname="Shear Modulus" value="8.4000E+08" />
+        <DENS displayname="Density" value="1.2000E+03" />
+        <KX displayname="Thermal Conductivity" value="0.2" />
+        <C displayname="Specific Heat" value="1.2000E+03" />
+        <SIGXT displayname="Tensile Strength" value="6.5000E+07" />
+      </physicalproperties>
+    </material>
+  </classification>
+  <classification name="Cores and wood (generic)">
+    <material name="PMI foam core 52 kg-m3 (generic)" matid="9101">
+      <swatchcolor RGB="f0e6c8">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="7.0000E+07" />
+        <NUXY displayname="Poisson's Ratio" value="0.3" />
+        <GXY displayname="Shear Modulus" value="2.4000E+07" />
+        <DENS displayname="Density" value="5.2000E+01" />
+        <KX displayname="Thermal Conductivity" value="0.03" />
+        <C displayname="Specific Heat" value="1.3000E+03" />
+        <SIGXT displayname="Tensile Strength" value="1.9000E+06" />
+      </physicalproperties>
+    </material>
+    <material name="PVC foam core 80 kg-m3 (generic)" matid="9102">
+      <swatchcolor RGB="f2d27a">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="9.0000E+07" />
+        <NUXY displayname="Poisson's Ratio" value="0.32" />
+        <GXY displayname="Shear Modulus" value="3.1000E+07" />
+        <DENS displayname="Density" value="8.0000E+01" />
+        <KX displayname="Thermal Conductivity" value="0.03" />
+        <C displayname="Specific Heat" value="1.3000E+03" />
+        <SIGXT displayname="Tensile Strength" value="2.2000E+06" />
+      </physicalproperties>
+    </material>
+    <material name="XPS foam 33 kg-m3 (generic)" matid="9103">
+      <swatchcolor RGB="a8cff0">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="1.5000E+07" />
+        <NUXY displayname="Poisson's Ratio" value="0.3" />
+        <GXY displayname="Shear Modulus" value="5.8000E+06" />
+        <DENS displayname="Density" value="3.3000E+01" />
+        <KX displayname="Thermal Conductivity" value="0.03" />
+        <C displayname="Specific Heat" value="1.3000E+03" />
+        <SIGXT displayname="Tensile Strength" value="3.0000E+05" />
+      </physicalproperties>
+    </material>
+    <material name="EPP foam 30 kg-m3 (generic)" matid="9104">
+      <swatchcolor RGB="3c3c3c">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="1.0000E+06" />
+        <NUXY displayname="Poisson's Ratio" value="0.3" />
+        <GXY displayname="Shear Modulus" value="3.8000E+05" />
+        <DENS displayname="Density" value="3.0000E+01" />
+        <KX displayname="Thermal Conductivity" value="0.04" />
+        <C displayname="Specific Heat" value="1.8000E+03" />
+        <SIGXT displayname="Tensile Strength" value="3.0000E+05" />
+      </physicalproperties>
+    </material>
+    <material name="Balsa medium 160 kg-m3 (generic)" matid="9105">
+      <swatchcolor RGB="e8d2a0">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="3.5000E+09" />
+        <NUXY displayname="Poisson's Ratio" value="0.3" />
+        <GXY displayname="Shear Modulus" value="1.5000E+08" />
+        <DENS displayname="Density" value="1.6000E+02" />
+        <KX displayname="Thermal Conductivity" value="0.06" />
+        <C displayname="Specific Heat" value="2.3000E+03" />
+        <SIGXT displayname="Tensile Strength" value="1.3000E+07" />
+      </physicalproperties>
+    </material>
+    <material name="GFRP plate quasi-isotropic (generic)" matid="9106">
+      <swatchcolor RGB="d8e0c0">
+        <sldcolorswatch:Optical Ambient="1.000000" Transparency="0.000000" Diffuse="1.000000" Specularity="0.500000" Shininess="0.300000" Emission="0.000000" />
+      </swatchcolor>
+      <xhatch name="ISO (plastic)" angle="0.0" scale="1.0" />
+      <physicalproperties>
+        <EX displayname="Elastic Modulus" value="2.0000E+10" />
+        <NUXY displayname="Poisson's Ratio" value="0.25" />
+        <GXY displayname="Shear Modulus" value="8.0000E+09" />
+        <DENS displayname="Density" value="1.8500E+03" />
+        <KX displayname="Thermal Conductivity" value="0.3" />
+        <C displayname="Specific Heat" value="1.1000E+03" />
+        <SIGXT displayname="Tensile Strength" value="3.0000E+08" />
+      </physicalproperties>
+    </material>
+  </classification>
+</mstns:materials>

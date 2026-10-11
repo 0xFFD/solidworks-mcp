@@ -1,0 +1,153 @@
+"""Pure 2D geometry used by the sketch tool: rounded outlines, airfoils and mirrored copies.
+
+Nothing here talks to SolidWorks, so it is unit tested directly. Lengths are in whatever unit the caller
+uses consistently (the sketch tool passes metres).
+"""
+
+from __future__ import annotations
+
+import math
+
+from .errors import SwError
+
+POINT_KEYS = ("from", "to", "corner1", "corner2", "center", "start", "end", "at", "origin")
+LIST_KEYS = ("points",)
+
+Line = tuple[str, float, float, float, float]
+Arc = tuple[str, float, float, float, float, float, float, int]
+
+
+def rounded_path(pts: list[tuple[float, float]], radii: list[float], closed: bool) -> list[tuple]:
+    """Lines and tangent arcs for a polyline whose corners are rounded with the given radii.
+
+    Returns ('line', x1, y1, x2, y2) and ('arc', cx, cy, sx, sy, ex, ey, direction) items, direction
+    1 for counterclockwise from start to end. A radius of 0 leaves a sharp corner.
+    """
+    n = len(pts)
+    corners: list[tuple[tuple[float, float], tuple[float, float], tuple | None]] = []  # (arrive, leave, arc)
+    for i in range(n):
+        p = pts[i]
+        r = radii[i]
+        if r <= 0 or (not closed and i in (0, n - 1)):
+            corners.append((p, p, None))
+            continue
+        a, b = pts[i - 1], pts[(i + 1) % n]
+        u = (a[0] - p[0], a[1] - p[1])
+        v = (b[0] - p[0], b[1] - p[1])
+        lu, lv = math.hypot(*u), math.hypot(*v)
+        if lu < 1e-12 or lv < 1e-12:
+            raise SwError("polyline has repeated points.")
+        u, v = (u[0] / lu, u[1] / lu), (v[0] / lv, v[1] / lv)
+        theta = math.acos(max(-1.0, min(1.0, u[0] * v[0] + u[1] * v[1])))
+        if theta < 1e-6 or abs(theta - math.pi) < 1e-6:
+            corners.append((p, p, None))  # collinear: nothing to round
+            continue
+        t = r / math.tan(theta / 2)
+        # an end point of an open polyline has no arc, so the full segment is available
+        limit_u = lu if (not closed and i - 1 == 0) else lu / 2
+        limit_v = lv if (not closed and i + 1 == n - 1) else lv / 2
+        if t > min(limit_u, limit_v) * (1 + 1e-9):
+            raise SwError(f"Corner radius {r:g} at point {i} is too large for the adjacent segments.")
+        t1 = (p[0] + u[0] * t, p[1] + u[1] * t)
+        t2 = (p[0] + v[0] * t, p[1] + v[1] * t)
+        bis = (u[0] + v[0], u[1] + v[1])
+        lb = math.hypot(*bis)
+        d = r / math.sin(theta / 2)
+        c = (p[0] + bis[0] / lb * d, p[1] + bis[1] / lb * d)
+        cross = (t1[0] - c[0]) * (t2[1] - c[1]) - (t1[1] - c[1]) * (t2[0] - c[0])
+        corners.append((t1, t2, (c[0], c[1], t1[0], t1[1], t2[0], t2[1], 1 if cross > 0 else -1)))
+    items: list[tuple] = []
+    segments = n if closed else n - 1
+    for i in range(n):
+        if corners[i][2] is not None:
+            items.append(("arc", *corners[i][2]))
+        if i < segments:
+            a = corners[i][1]
+            b = corners[(i + 1) % n][0]
+            if math.dist(a, b) > 1e-12:
+                items.append(("line", a[0], a[1], b[0], b[1]))
+    return items
+
+
+def naca4(code: str, n: int = 40, closed_te: bool = False) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    """Upper and lower surfaces (unit chord, leading edge first, cosine spacing) of a NACA 4-digit airfoil."""
+    code = str(code).strip()
+    if not (len(code) == 4 and code.isdigit()):
+        raise SwError(f"NACA code '{code}' must be 4 digits, e.g. '0012' or '2412'.")
+    m, p, t = int(code[0]) / 100, int(code[1]) / 10, int(code[2:]) / 100
+    if t <= 0:
+        raise SwError("NACA thickness (last two digits) must be above 0.")
+    if m > 0 and not 0 < p < 1:
+        raise SwError("A cambered NACA section needs a camber position digit between 1 and 9.")
+    a4 = -0.1036 if closed_te else -0.1015
+    up, lo = [], []
+    for i in range(n + 1):
+        x = (1 - math.cos(math.pi * i / n)) / 2
+        yt = 5 * t * (0.2969 * math.sqrt(x) - 0.1260 * x - 0.3516 * x**2 + 0.2843 * x**3 + a4 * x**4)
+        if m > 0:
+            if x < p:
+                yc, dyc = m / p**2 * (2 * p * x - x**2), 2 * m / p**2 * (p - x)
+            else:
+                yc, dyc = m / (1 - p) ** 2 * ((1 - 2 * p) + 2 * p * x - x**2), 2 * m / (1 - p) ** 2 * (p - x)
+        else:
+            yc, dyc = 0.0, 0.0
+        th = math.atan(dyc)
+        up.append((x - yt * math.sin(th), yc + yt * math.cos(th)))
+        lo.append((x + yt * math.sin(th), yc - yt * math.cos(th)))
+    return up, lo
+
+
+def airfoil_loop(code: str, chord: float, origin: tuple[float, float], angle_deg: float, n: int = 40) -> list[tuple[float, float]]:
+    """Airfoil outline from the upper trailing edge round the nose to the lower trailing edge,
+    scaled to `chord`, rotated counterclockwise by `angle_deg` about the leading edge at `origin`."""
+    up, lo = naca4(code, n)
+    a = math.radians(angle_deg)
+    ca, sa = math.cos(a), math.sin(a)
+    ox, oy = origin
+
+    def tf(q: tuple[float, float]) -> tuple[float, float]:
+        return ox + chord * (q[0] * ca - q[1] * sa), oy + chord * (q[0] * sa + q[1] * ca)
+
+    return [tf(q) for q in reversed(up)] + [tf(q) for q in lo[1:]]
+
+
+def mirrored(e: dict, sx: float, sy: float) -> dict:
+    """Copy of an entity reflected by (x, y) -> (sx*x, sy*y)."""
+    out = dict(e)
+    out.pop("mirror", None)
+
+    def f(p):
+        return [p[0] * sx, p[1] * sy]
+
+    for k in POINT_KEYS:
+        if out.get(k) is not None:
+            out[k] = f(out[k])
+    for k in LIST_KEYS:
+        if out.get(k) is not None:
+            out[k] = [f(p) for p in out[k]]
+    t = out.get("type")
+    if sx * sy < 0:
+        if t == "arc":
+            out["direction"] = "cw" if (e.get("direction") or "ccw").lower() == "ccw" else "ccw"
+        if t in ("airfoil", "ellipse", "polygon", "bolt_circle"):
+            key = "start_angle" if t == "bolt_circle" else "angle"
+            default = 90 if t == "polygon" else 0
+            a = out.get(key, default)
+            out[key] = (180 - a) if sx < 0 else -a
+    elif sx < 0 and sy < 0 and t in ("airfoil", "ellipse", "polygon", "bolt_circle"):
+        key = "start_angle" if t == "bolt_circle" else "angle"
+        out[key] = out.get(key, 90 if t == "polygon" else 0) + 180
+    return out
+
+
+def expand_mirror(e: dict) -> list[dict]:
+    """The entity plus mirrored copies requested with mirror='left_right' | 'up_down' | 'both'."""
+    m = (e.get("mirror") or "").lower()
+    if not m:
+        return [e]
+    base = dict(e)
+    base.pop("mirror")
+    copies = {"left_right": [(-1, 1)], "up_down": [(1, -1)], "both": [(-1, 1), (1, -1), (-1, -1)]}.get(m)
+    if copies is None:
+        raise SwError("mirror must be 'left_right' (about the sketch Y axis), 'up_down' (about the X axis) or 'both'.")
+    return [base] + [mirrored(base, sx, sy) for sx, sy in copies]
