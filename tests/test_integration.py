@@ -647,6 +647,14 @@ def test_advanced_mates_and_explode(tmp_path: Path):
             comps = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
             assert comps["follower-1"][1] == pytest.approx(430)  # 10 mm flat half-length + 20 mm arc radius above the centre
             assert "tangent mate" in await c.fails("add_mate", type="cam", refs=["face@gear20-2/10,120,2.5", "face@follower-1/0,430,5"])
+            # a carriage corner on a curved track (an assembly sketch arc of radius 50 about (0, 600))
+            await c.call("insert_component", path="slider.sldprt", position=[30, 660, 20])
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "arc", "center": [0, 600], "start": [50, 600], "end": [-50, 600]}])
+            track = (await c.call("finish_sketch"))["sketch"]
+            pm = await c.call("add_mate", type="path", refs=["vertex@slider-3/30,660,20", f"sketch:{track}"])
+            x, y, z = pm["vertex_at_mm"]
+            assert math.hypot(x, y - 600) == pytest.approx(50, abs=1e-3) and z == pytest.approx(0, abs=1e-3)
             # GD&T on assembly components, including one that is not at the origin
             assert (await c.call("add_datum_target", face="face@slotplate-1/-30,-25,10", at=[-30, -25, 10], label="C1"))["datum_target"] == "C1"
             await c.call("add_datum", face="face@rail-1/0,0,0", label="A")

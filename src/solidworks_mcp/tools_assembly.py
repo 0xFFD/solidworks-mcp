@@ -177,6 +177,50 @@ def _advanced_mate(doc, asm, type: str, refs: list[str], distance: float, angle:
             SW.cast(dim, "IDimension").SetSystemValue3(mm(distance), C.swSetValue_InAllConfigurations, None)
 
 
+def _path_mate(doc, asm, refs: list[str]) -> dict:
+    """A path mate as a point-on-curve coincidence: SolidWorks' own path mate has no API (no path mate data in the
+    type library, and AddMate5 makes nothing), but a vertex coincident with a curve follows it the same way."""
+    import re
+
+    m = re.match(r"^vertex@\s*([^/]+)/\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*$", refs[0].strip())
+    if not m:
+        raise SwError("A path mate needs refs[0] = 'vertex@Comp-1/x,y,z' (the component corner nearest that point).")
+    comp = g.find_component(doc, m.group(1))
+    xf = g.Placement(comp)
+    target = [mm(float(m.group(k))) for k in (2, 3, 4)]
+    verts = [v for b in SW.cast_all(comp.GetBodies2(0), "IBody2") for v in SW.cast_all(b.GetVertices(), "IVertex")]
+    if not verts:
+        raise SwError(f"{m.group(1)} has no vertices to put on the path.")
+    vtx = min(verts, key=lambda v: math.dist(xf.point(v.GetPoint()), target))
+    path = refs[1].strip()
+    doc.ClearSelection2(True)
+    sel = SW.cast(doc.SelectionManager, "ISelectionMgr")
+    data = SW.cast(sel.CreateSelectData(), "ISelectData")
+    data.Mark = 1
+    SW.cast(vtx, "IEntity").Select4(True, data)
+    if path.startswith("edge"):
+        g.select(doc, path, mark=1)
+    else:
+        f = g.feature_by_name(doc, path.removeprefix("sketch:"))
+        if f is None or f.GetTypeName2() not in ("ProfileFeature", "3DProfileFeature"):
+            raise SwError(f"{path} is not a sketch of the assembly.")
+        segs = [x for x in SW.cast_all(SW.cast(f.GetSpecificFeature2(), "ISketch").GetSketchSegments(), "ISketchSegment") if not x.ConstructionGeometry]
+        if len(segs) != 1:
+            raise SwError(f"{path} must hold exactly one line, arc or spline (it has {len(segs)}); join a chain into one spline.")
+        data2 = SW.cast(sel.CreateSelectData(), "ISelectData")
+        data2.Mark = 1
+        segs[0].Select4(True, data2)
+    C = SW.C
+    res = asm.AddMate5(C.swMateCOINCIDENT, C.swMateAlignCLOSEST, False, 0, 0, 0, 0.001, 0.001, 0, 0, 0, False, False, 0, 0)
+    mate, err = (res if isinstance(res, tuple) else (res, 0))
+    doc.ClearSelection2(True)
+    if mate is None:
+        raise SwError(f"SolidWorks could not put the vertex on the path ({const_name('swAddMateError_', err)}).")
+    doc.EditRebuild3()
+    at = g.Placement(comp).point(vtx.GetPoint())  # the component has moved onto the path
+    return {"mate": _last_mate(doc), "type": "path", "vertex_at_mm": [round(to_mm(c), 4) for c in at]}
+
+
 def _check_cam(doc, ref: str) -> None:
     """A cam mate on a single closed face (a plain or eccentric cylinder) crashes SolidWorks, so refuse it."""
     face = g.resolve(doc, ref).obj
@@ -191,7 +235,7 @@ def _check_cam(doc, ref: str) -> None:
 def add_mate(
     type: Annotated[Literal["coincident", "concentric", "perpendicular", "parallel", "tangent", "distance", "angle", "lock",
                             "limit_distance", "limit_angle", "width", "symmetric", "gear", "slot", "hinge", "rack_pinion", "screw",
-                            "universal_joint", "cam"], Field(description=(
+                            "universal_joint", "cam", "path"], Field(description=(
         "Mate type. limit_distance / limit_angle allow travel between minimum and maximum (control surface stops, slides); "
         "width centres a tab between two faces; symmetric places two entities symmetric about plane; gear couples rotation "
         "of two cylindrical faces or circular edges by ratio; slot keeps a pin (cylinder or axis) in a slot face; hinge is a "
@@ -199,7 +243,9 @@ def add_mate(
         "to a rotating cylinder (refs[1]) with distance = pitch diameter; screw couples rotation and travel of two "
         "cylindrical faces with distance = lead per revolution (jackscrews, actuators); universal_joint couples two shafts; "
         "cam keeps a follower (refs[1]: a face, edge or vertex) on a cam (refs[0]: any face of the cam's closed chain of "
-        "tangent faces, such as an extruded lobe of lines and arcs)."))],
+        "tangent faces, such as an extruded lobe of lines and arcs); path keeps a component vertex (refs[0]: 'vertex@Comp-1/x,y,z', "
+        "the corner nearest that point) on a curve (refs[1]: an assembly sketch holding one line, arc or spline, or an edge), "
+        "for carriages, cable runs and flap tracks."))],
     refs: Annotated[list[str], Field(description="Two references on different components: 'face:Comp-1/N', 'edge:Comp-1/N', 'face@Comp-1/x,y,z', plane names, or 'comp:Name' for lock. Width: the two width faces.")],
     distance: Annotated[float, Field(description="Distance in mm (distance mates; nominal position for limit_distance).")] = 0.0,
     angle: Annotated[float, Field(description="Angle in degrees (angle mates; nominal position for limit_angle).")] = 0.0,
@@ -224,6 +270,8 @@ def add_mate(
         _advanced_mate(doc, asm, type, refs, distance, angle, alignment, flip, minimum, maximum, plane, tab, ratio, faces, slot_position, percent)
         doc.EditRebuild3()
         return {"mate": _last_mate(doc), "type": type}
+    if type == "path":
+        return _path_mate(doc, asm, refs)
     if type == "cam":
         _check_cam(doc, refs[0])
     doc.ClearSelection2(True)

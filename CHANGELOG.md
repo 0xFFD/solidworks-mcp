@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Path mates: `add_mate(type='path')` keeps a component vertex on a curve (an assembly sketch line, arc or spline,
+  or an edge) as a point-on-curve coincidence, since SolidWorks' own path mate has no API.
 - `mould_split` makes core and cavity blocks for a part with a flat parting line (layup tools, moulds, casting
   patterns), optionally scaling the part for shrinkage; the halves and the part add up to the block.
 - `motion_study` drives an assembly with rotary (rpm) and linear (mm/s) motors in Basic Motion and reports how far
