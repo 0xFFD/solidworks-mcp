@@ -359,6 +359,20 @@ def test_sheet_metal(tmp_path: Path):
             hat = await c.call("flat_pattern")
             assert hat["bends"] == 4 and hat["flat_size_mm"][0] == pytest.approx(200)
             await c.call("close_document")
+
+            # a supplier's bent bracket arrives as a dumb STEP solid: convert it and get the blank
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "polyline", "closed": True, "points": [[0, 0], [60, 0], [60, 2], [2, 2], [2, 40], [0, 40]]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=30)
+            await c.call("export", path="supplier_bracket.step", step_ap="214")
+            await c.call("close_document")
+            await c.call("import_file", path="supplier_bracket.step")
+            conv = await c.call("convert_to_sheet_metal", fixed_face="face@30,0,15", bend_edges=["edge@0,0,15"], thickness=2, bend_radius=2)
+            # outer legs 60 and 40, less 2 x (r + t), plus the bend allowance pi/2 x (r + K t)
+            assert conv["bends"] == 1 and conv["flat_size_mm"][0] == pytest.approx(100 - 8 + 3.14159265 / 2 * (2 + 0.5 * 2), abs=0.01)
+            await c.call("close_document")
         finally:
             await c.call("close_document")
 

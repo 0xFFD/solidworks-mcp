@@ -300,3 +300,41 @@ def sketched_bend(
     out = result(doc, f, "sketched bend", f"{name} needs straight lines on a flat face of the sheet.")
     out["angle"] = angle
     return out
+
+
+@tool(WRITES)
+def convert_to_sheet_metal(
+    fixed_face: Annotated[str, Field(description="A flat face of the part that stays in place when it is flattened ('face@x,y,z').")],
+    bend_edges: Annotated[list[str], Field(description="The sharp outside corner edges where the part bends ('edge@x,y,z'); each becomes a bend.")],
+    thickness: Annotated[float, Field(gt=0, description="Wall thickness of the part in mm.")],
+    bend_radius: Annotated[float, Field(gt=0, description="Inside bend radius in mm.")],
+    gap: Annotated[float, Field(ge=0, description="Rip gap in mm at corners without a bend.")] = 0.1,
+) -> dict:
+    """Turn a solid of uniform thickness (such as an imported STEP bracket) into a sheet metal part with
+    bends, so flat_pattern can report and export its blank."""
+    doc = SW.active("part")
+    C = SW.C
+    if any(f.GetTypeName2() == "SheetMetal" for f in g.iter_features(doc)):
+        raise SwError("The part is already sheet metal.")
+    before = _last_feature(doc).Name
+    doc.ClearSelection2(True)
+    face = g.resolve(doc, fixed_face)
+    if face.kind != "face":
+        raise SwError(f"{fixed_face} is not a face.")
+    face.select(doc, mark=0)
+    for e in bend_edges:
+        ref = g.resolve(doc, e)
+        if ref.kind != "edge":
+            raise SwError(f"{e} is not an edge.")
+        ref.select(doc, mark=1)
+    doc.FeatureManager.InsertConvertToSheetMetal2(mm(thickness), False, False, mm(bend_radius), mm(gap), C.swSheetMetalReliefRectangular,
+                                                  0.5, 0, 0.5, False)
+    doc.ClearSelection2(True)
+    if not any(f.GetTypeName2() == "SheetMetal" for f in g.iter_features(doc)) or _last_feature(doc).Name == before:
+        raise SwError("SolidWorks could not convert the part; give a flat fixed face and the outside corner edges of the bends.")
+    doc.EditRebuild3()
+    info = flat_pattern("info")
+    info["feature"] = _last_feature(doc).Name
+    if info.get("bends", 0) < len(bend_edges):
+        info["warning"] = f"{len(bend_edges)} bend edges were given but the flat pattern has {info.get('bends', 0)} bends; check the edges."
+    return info
