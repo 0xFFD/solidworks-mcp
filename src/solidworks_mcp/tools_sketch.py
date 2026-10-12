@@ -161,7 +161,9 @@ def _add(doc: Any, sm: Any, e: dict) -> list:
         w, h = (mm(v) for v in e.get("size") or (0, 0))
         if w <= 0 or h <= 0:
             raise SwError("center_rectangle size must be [width, height] with both above 0.")
-        segs += list(sm.CreateCenterRectangle(cx, cy, 0, cx + w / 2, cy + h / 2, 0) or [])
+        # Drawn from its corners: the construction diagonals of CreateCenterRectangle capture the corners of
+        # a second centre rectangle on the same centre and pull it to the outer one's proportions.
+        segs += list(sm.CreateCornerRectangle(cx - w / 2, cy - h / 2, 0, cx + w / 2, cy + h / 2, 0) or [])
     elif t == "rounded_rectangle":
         (x1, y1), (x2, y2) = e["corner1"], e["corner2"]
         r = float(e.get("radius", 0))

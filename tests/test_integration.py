@@ -799,6 +799,36 @@ def test_weldment_frame(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_weldment_caps_and_gussets(tmp_path: Path):
+    """A U frame of rectangular tube with its open ends capped and gussets in the corners."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "polyline", "points": [[300, 0], [0, 0], [0, 200]]},
+                                             {"type": "line", "from": [300, 0], "to": [300, 150]}])
+            await c.call("finish_sketch")
+            frame = await c.call("structural_member", shape="rect_tube", size=[40, 30, 3])
+            # section 40x30 - 34x24 = 384 mm2 over 650 mm of mitred centreline (the inner wall must stay 3 mm)
+            assert frame["volume_mm3"] == pytest.approx(384 * 650, rel=1e-6)
+            caps = await c.call("end_cap", thickness=4, offset=1, corner_chamfer=2)
+            # only the two open tops are capped: (38 x 28 - 4 chamfers of 2 x 2 / 2) x 4
+            assert [x["volume_mm3"] for x in caps["caps"]] == pytest.approx([(38 * 28 - 8) * 4] * 2)
+            assert "No open tube ends" in await c.fails("end_cap")
+            tri = await c.call("gusset", faces=["face@150,20,0", "face@20,100,0"], size=[80, 60], thickness=5)
+            assert tri["plates"][0]["volume_mm3"] == pytest.approx(80 * 60 / 2 * 5)
+            poly = await c.call("gusset", faces=["face@150,20,0", "face@280,75,0"], size=[80, 50], shape="polygon", end_length=10, thickness=4)
+            assert poly["plates"][0]["volume_mm3"] == pytest.approx((80 * 50 - 70 * 40 / 2) * 4)
+            assert "shorter than both legs" in await c.fails("gusset", faces=["face@150,20,0", "face@280,75,0"], size=[80, 50], shape="polygon", end_length=60)
+            items = (await c.call("cut_list"))["items"]
+            assert sum(i["quantity"] for i in items) == 3 + 2 + 2
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

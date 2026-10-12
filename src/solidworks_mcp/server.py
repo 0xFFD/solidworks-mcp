@@ -56,7 +56,7 @@ Typical part workflow:
    DXF, DWG, PNG), create_drawing (standard views, model dimensions and GD&T), section_view, add_note;
    detail_view, projected_view, auxiliary_view, broken_view, breakout_section, add_view (incl. flat_pattern), sheets, drawing_dimension, view_dimensions,
    drawing_table (bom with balloons, revision block, hole table).
-Weldments: structural_member (tube, bar, angle, channel along sketch lines; frames, rigs, GSE).
+Weldments: structural_member (tube, bar, angle, channel along sketch lines; frames, rigs, GSE), end_cap, gusset, cut_list.
 Assemblies: insert_component (origin at position), add_mate (incl. limit_distance/limit_angle travel stops, width,
 symmetric, gear, slot, hinge, rack_pinion, screw, universal_joint), exploded_view, list_components, interference_check, bom (mass budget).
 Results are proposals for an engineer to review; check every model and drawing before release.

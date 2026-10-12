@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Weldment `end_cap` (caps every open tube end, or chosen ones, with inset, inward placement and corner
+  chamfers) and `gusset` (triangular or polygonal corner plates, placed at either end or the middle of the corner).
 - Sketch editing: `list_sketch` lists the segments and points of a sketch, and `modify_sketch` trims, offsets,
   converts model edges, adds sketch fillets and chamfers, relations and driving dimensions, and moves, rotates,
   copies, deletes or toggles construction on individual entities. Sketch items are addressed as `seg:N`, `pt:N`,
@@ -70,6 +72,10 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- A `center_rectangle` drawn inside another on the same centre was pulled to the outer rectangle's proportions
+  by its construction diagonals, so rectangular tube profiles had a distorted inner wall (40x30x3 came out
+  369 mm2 instead of 384). Centre rectangles are now drawn from their corners, and cached generated profiles are
+  rebuilt.
 - `screenshot` crops to the model, so parts away from the origin are no longer small and off-centre
   (SolidWorks' zoom to fit also frames hidden reference geometry).
 - `set_dimensions` treated unitless dimensions such as pattern instance counts as millimetres, so setting a
