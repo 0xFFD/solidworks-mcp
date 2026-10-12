@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `forming_tool` places design-library forming tools (dimples, embosses, flanged holes, louvres, lances, ribs)
+  exactly on a sheet metal face, refusing placements that run off the sheet.
 - `tolerance_stack` computes worst-case and RSS limits of a one-dimensional dimension chain (clearances, gaps,
   grip lengths) from model dimensions and their tolerances or given values, and checks a requirement.
 - `modify_sketch` ops `set_point` (a point at exact coordinates; spline fit points reshape the spline through

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -448,4 +449,97 @@ def miter_flange(
             doc.BlankRefGeom()
     out = result(doc, f, "miter flange", "The edges must be connected straight edges on one face of the sheet, listed in order.")
     out["edges"] = len(edges)
+    return out
+
+
+def _forming_tools() -> dict[str, str]:
+    """Forming tools of the SolidWorks design library, by name ('dimple', 'louver', 'extruded hole', ...)."""
+    import glob
+    import os
+
+    roots = [os.path.join(os.environ.get("PROGRAMDATA", r"C:\ProgramData"), "SolidWorks", f"SOLIDWORKS {y}", "design library", "forming tools")
+             for y in range(2035, 2017, -1)]
+    for root in roots:
+        if os.path.isdir(root):
+            return {os.path.splitext(os.path.basename(p))[0].lower(): p for p in glob.glob(os.path.join(root, "**", "*.sldftp"), recursive=True)}
+    return {}
+
+
+@tool(WRITES)
+def forming_tool(
+    tool_name: Annotated[str, Field(description=(
+        "Forming tool from the SolidWorks design library by name ('dimple', 'louver', 'extruded hole', 'round flange', "
+        "'single rib', 'circular emboss', 'counter sink emboss', 'bridge lance', ...) or a .sldftp file."))],
+    position: Annotated[list[float], Field(min_length=3, max_length=3, description="Where on the sheet face it goes, model mm [x, y, z].")],
+    angle: Annotated[float, Field(description="Rotation about the face normal, degrees (louvres, ribs, lances).")] = 0.0,
+    flip: Annotated[bool, Field(description="Form towards the other side of the sheet.")] = False,
+) -> dict:
+    """Forming tool on a sheet metal face: dimples, embosses, flanged (extruded) holes, louvres, lances and stiffening
+    ribs, placed exactly. They show in the flat pattern and its DXF as their tool profiles."""
+    doc = SW.active("part")
+    _sheet_metal_feature(doc)
+    lib = _forming_tools()
+    if tool_name.lower().endswith(".sldftp"):
+        path = str(app().path(tool_name, must_exist=True, suffixes=(".sldftp",)))
+    elif tool_name.lower() in lib:
+        path = lib[tool_name.lower()]
+    else:
+        raise SwError(f"No forming tool '{tool_name}'. Available: {', '.join(sorted(lib)) or 'none (the design library is not installed)'}.")
+    face = g.resolve(doc, "face@{},{},{}".format(*position))
+    box0 = list(SW.part(doc).GetPartBox(True))
+    doc.ClearSelection2(True)
+    face.select(doc, append=False)
+    f = doc.FeatureManager.InsertFormToolFeature(path, flip, rad(angle), "", False, False, False, False, True)
+    doc.ClearSelection2(True)
+    if f is None:
+        raise SwError(f"SolidWorks could not place {tool_name}; pick a flat face of the sheet with room for it.")
+    f = SW.cast(f, "IFeature")
+    target = [mm(c) for c in position]
+    # the tool lands at the sketch origin; its position sketch's origin is the insertion point and moves with
+    # the sketch, so move the sketch until that origin is on the requested point
+    sub = SW.cast(f.GetFirstSubFeature(), "IFeature")
+    while sub is not None and sub.GetTypeName2() != "ProfileFeature":
+        sub = SW.cast(sub.GetNextSubFeature(), "IFeature")
+    placed = False
+    if sub is not None:
+        sk = SW.cast(sub.GetSpecificFeature2(), "ISketch")
+        frame = SketchFrame(sk)
+        b = frame.to_sketch(target)
+        doc.ClearSelection2(True)
+        sub.Select2(False, 0)
+        doc.EditSketch()
+        for s_ in SW.cast_all(sk.GetSketchSegments(), "ISketchSegment"):
+            s_.Select4(True, None)
+        for p_ in SW.cast_all(sk.GetSketchPoints2(), "ISketchPoint"):
+            p_.Select4(True, None)
+        doc.Extension.MoveOrCopy(False, 1, False, 0, 0, 0, b[0], b[1], 0)
+        doc.SketchManager.InsertSketch(True)
+        doc.ClearSelection2(True)
+        doc.EditRebuild3()
+        normal = _unit(list(face.obj.Normal))
+        box1 = list(SW.part(doc).GetPartBox(True))
+        # the form must stay on the sheet: across the face the part may not grow
+        inside = all(box1[i] >= box0[i] - 1e-6 and box1[i + 3] <= box0[i + 3] + 1e-6 for i in range(3) if abs(normal[i]) < 0.99)
+
+        def on_target(sketch_feat: Any) -> bool:
+            o = SketchFrame(SW.cast(sketch_feat.GetSpecificFeature2(), "ISketch")).to_model([0.0, 0.0, 0.0])
+            off = [o[i] - target[i] for i in range(3)]
+            along = sum(off[i] * normal[i] for i in range(3))
+            return math.dist(off, [along * n for n in normal]) < 1e-6
+
+        # the tool's profile sketch follows the position sketch: its origin must now be on the point
+        others = []
+        x = SW.cast(f.GetFirstSubFeature(), "IFeature")
+        while x is not None:
+            if x.GetTypeName2() == "ProfileFeature" and x.Name != sub.Name:
+                others.append(x)
+            x = SW.cast(x.GetNextSubFeature(), "IFeature")
+        placed = inside and any(on_target(o) for o in others) and f.GetErrorCode2()[0] == 0
+    if not placed:
+        doc.ClearSelection2(True)
+        f.Select2(False, 0)
+        doc.Extension.DeleteSelection2(SW.C.swDelete_Absorbed)
+        raise SwError(f"{tool_name} could not be placed at {position} (it may run off the sheet or over a bend). Nothing was created.")
+    out = result(doc, f, "forming tool")
+    out.update(tool=Path(path).stem, position=position)
     return out

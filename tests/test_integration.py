@@ -399,6 +399,14 @@ def test_sheet_metal(tmp_path: Path):
             ba = 3.14159265 / 2 * (2 + 0.5 * 2)
             flat = (await c.call("flat_pattern"))["flat_size_mm"]
             assert flat == pytest.approx([96 + ba + 18, 52 + 2 * (ba + 18)], abs=0.01)  # outer 22 mm flanges, 4 mm setback per bend
+            # a stiffening dimple and a flanged lightening hole in the tray floor, placed exactly; one off the edge is refused
+            dimple = await c.call("forming_tool", tool_name="dimple", position=[-20, 0, 0])
+            hole = await c.call("forming_tool", tool_name="extruded hole", position=[25, 0, 0])
+            assert dimple["type"] == hole["type"] == "FormToolInstance"
+            before = len((await c.call("list_features"))["features"])
+            assert "could not be placed" in await c.fails("forming_tool", tool_name="dimple", position=[48, 0, 28])
+            assert len((await c.call("list_features"))["features"]) == before
+            assert "Available:" in await c.fails("forming_tool", tool_name="no such tool", position=[0, 0, 0])
         finally:
             await c.call("close_document")
 
