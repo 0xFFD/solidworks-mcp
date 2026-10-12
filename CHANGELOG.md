@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Radial explode steps: `exploded_view(steps=[{components, radial: true, distance}])` moves a ring of parts
+  straight out from its centre axis (fastener patterns on flanges and bulkheads).
 - `hole` drills curved faces too: radial holes in tubes and shafts are placed exactly and square to the
   surface (one Hole Wizard feature per hole), and checked against the requested point.
 - `miter_flange` runs one flange along a chain of connected edges with mitred corners, from a profile

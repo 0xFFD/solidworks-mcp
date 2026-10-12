@@ -930,6 +930,35 @@ def test_radial_holes(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_radial_explode(tmp_path: Path):
+    """A ring of four parts exploded straight out from their centre axis."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-2, -2], "corner2": [2, 2]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=4)
+        await c.call("save_document", path="nub.sldprt")
+        await c.call("close_document")
+        await c.call("new_document", kind="assembly")
+        try:
+            ring = [[20, 0, 0], [0, 20, 0], [-20, 0, 0], [0, -20, 0]]
+            for p in ring:
+                await c.call("insert_component", path="nub.sldprt", position=p)
+            before = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
+            out = await c.call("exploded_view", steps=[{"components": list(before), "radial": True, "distance": 30}])
+            assert out["steps_added"][0]["radial"] is True
+            after = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
+            for k, b in before.items():  # each part moves 30 mm further out along its own radius
+                assert after[k] == pytest.approx([v * 2.5 for v in b])
+            assert "two or more components" in await c.fails("exploded_view", steps=[{"components": ["nub-1"], "radial": True, "distance": 30}])
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

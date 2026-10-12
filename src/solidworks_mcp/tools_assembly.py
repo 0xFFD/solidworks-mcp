@@ -248,7 +248,9 @@ def exploded_view(
     steps: Annotated[list[dict[str, Any]] | None, Field(description=(
         "Explode steps in order: {components: ['Bracket-1', ...], direction: 'x' | 'y' | 'z' | '-x' | '-y' | '-z' "
         "(assembly axes), distance: mm, rotate: degrees (optional), axis: 'x' | 'y' | 'z' (rotation axis, default the "
-        "direction axis)}. A step may only rotate (distance 0). Omit steps to just show or hide the exploded view."))] = None,
+        "direction axis)}. A step may only rotate (distance 0). {components, radial: true, distance} moves a ring of parts "
+        "(bolts around a flange, fasteners around a bulkhead) straight out from their common centre axis. Omit steps to "
+        "just show or hide the exploded view."))] = None,
     show: Annotated[bool, Field(description="Show the assembly exploded (true) or collapsed (false) afterwards.")] = True,
 ) -> dict:
     """Exploded view of the active assembly for assembly instructions, manuals and drawings (an isometric
@@ -271,6 +273,20 @@ def exploded_view(
             angle = float(st.get("rotate", 0))
             if not comps or not (dist or angle):
                 raise SwError(f"steps[{i}] needs components and a distance or a rotation.")
+            if st.get("radial"):
+                if len(comps) < 2 or dist <= 0:
+                    raise SwError(f"steps[{i}]: a radial step needs two or more components and a distance above 0.")
+                doc.ClearSelection2(True)
+                for c in comps:
+                    g.select(doc, c if c.startswith("comp:") else f"comp:{c}", mark=1)
+                # SolidWorks takes the axis through the centre of the ring, square to its plane
+                res = cfg.AddRadialExplodeStep(mm(dist), 0.0, False)
+                step, err = (res if isinstance(res, tuple) else (res, 0))
+                doc.ClearSelection2(True)
+                if step is None:
+                    raise SwError(f"steps[{i}]: SolidWorks could not add the radial step ({const_name('swCreateExplodeStepError_', err)}).")
+                done.append({"components": comps, "radial": True, "distance": dist})
+                continue
             direction = str(st.get("direction", "y")).strip().lower()
             reverse = direction.startswith("-")
             if direction.lstrip("-+") not in _AXES:
