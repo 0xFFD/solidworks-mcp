@@ -125,3 +125,14 @@ def test_distances_for_picking_sketch_segments():
     # the same end points clockwise cover the other three quarters
     assert shapes.dist_to_arc(p, (0, 0), 5, (5, 0), (0, 5), ccw=False) == pytest.approx(0)
     assert shapes.dist_to_polyline((1, 1), [(0, 0), (2, 0), (2, 2)]) == pytest.approx(1)
+
+
+def test_frame_chains():
+    sq = [((0, 0), (1, 0)), ((1, 0), (1, 1)), ((1, 1), (0, 1)), ((0, 1), (0, 0))]
+    assert [sorted(c) for c in shapes.chains(sq)] == [[0, 1, 2, 3]]  # a closed loop is one chain
+    branched = sq + [((0, 0), (0, -1))]
+    parts = sorted(sorted(c) for c in shapes.chains(branched))
+    assert sum(len(c) for c in parts) == 5 and [4] in parts  # the branch is its own chain
+    assert all(len(set(c)) == len(c) for c in parts)
+    open_l = [((0, 0), (1, 0)), ((1, 0), (1, 1))]
+    assert [sorted(c) for c in shapes.chains(open_l)] == [[0, 1]]

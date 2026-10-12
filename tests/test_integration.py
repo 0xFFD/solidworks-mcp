@@ -737,6 +737,33 @@ def test_hems_bends_splits_and_surfaces(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_weldment_frame(tmp_path: Path):
+    """A square-tube frame with an upright (a branch), and an angle member, from generated profiles."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="3d")
+            await c.call("sketch", entities=[{"type": "polyline", "closed": True, "points": [[0, 0, 0], [300, 0, 0], [300, 0, 200], [0, 0, 200]]},
+                                             {"type": "line", "from": [0, 0, 0], "to": [0, 250, 0]}])
+            await c.call("finish_sketch")
+            frame = await c.call("structural_member", shape="square_tube", size=[20, 2], corner="butt")
+            # tube section 400 - 256 = 144 mm2; 1000 mm of frame plus the upright, trimmed by half a tube at the joint
+            assert frame["members"] == 5 and frame["volume_mm3"] == pytest.approx(144 * (1000 + 240), rel=0.001)
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "line", "from": [0, -300], "to": [300, -300]}])
+            await c.call("finish_sketch")
+            angle = await c.call("structural_member", shape="angle", size=[25, 25, 3])
+            assert angle["volume_mm3"] - frame["volume_mm3"] == pytest.approx((25 + 22) * 3 * 300)
+            assert "too thick" in await c.fails("structural_member", shape="round_tube", size=[16, 9])
+            await c.call("set_material", name="6061-T6 (SS)")
+            assert (await c.call("mass_properties"))["mass_kg"] == pytest.approx(angle["volume_mm3"] * 2.7e-6, rel=0.001)
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

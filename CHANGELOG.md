@@ -58,6 +58,9 @@ All notable changes to this project are documented here. The format follows
 - `hole` takes positions on several faces in one call and makes one Hole Wizard feature per face.
 - `convert_to_sheet_metal` turns a uniform-thickness solid, such as an imported STEP bracket, into sheet metal
   with bends so its flat blank can be reported and exported.
+- Weldments: `structural_member` builds tube, bar, angle and channel members along 2D or 3D sketch lines with
+  mitred or butted corners, splitting branched frames into member groups. Profiles are generated from their
+  dimensions, so the optional SolidWorks profile library is not needed.
 - `design_guide('sheet_metal')`: bend radii for 5052, 6061, 2024 and 7075 aluminium, stainless and
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 

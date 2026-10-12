@@ -184,3 +184,40 @@ def dist_to_polyline(p: tuple[float, float], pts: list[tuple[float, float]]) -> 
     if len(pts) == 1:
         return math.dist(p, pts[0])
     return min(dist_to_line(p, pts[i], pts[i + 1]) for i in range(len(pts) - 1))
+
+
+# ---------------------------------------------------------------------------------------------- frames
+
+
+def chains(ends: list[tuple[tuple, tuple]]) -> list[list[int]]:
+    """Split segments (pairs of end points) into simple chains: runs that only pass through points where
+    exactly two segments meet. Weldment member groups must be chains like this."""
+    touching: dict[tuple, list[int]] = {}
+    for i, (a, b) in enumerate(ends):
+        touching.setdefault(a, []).append(i)
+        touching.setdefault(b, []).append(i)
+    used: set[int] = set()
+    out: list[list[int]] = []
+
+    def walk(start: int, node: tuple) -> list[int]:
+        run, seg, here = [start], start, node
+        used.add(start)
+        while True:
+            a, b = ends[seg]
+            nxt = b if a == here else a
+            others = [s for s in touching[nxt] if s != seg]
+            if len(touching[nxt]) != 2 or others[0] in used:
+                return run
+            seg, here = others[0], nxt
+            used.add(seg)
+            run.append(seg)
+
+    for p, segs in touching.items():  # start at every end or branch point
+        if len(segs) != 2:
+            for s in segs:
+                if s not in used:
+                    out.append(walk(s, p))
+    for i, (a, _) in enumerate(ends):  # what is left are closed loops
+        if i not in used:
+            out.append(walk(i, a))
+    return out
