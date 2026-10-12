@@ -237,6 +237,16 @@ def test_sketch_and_feature_editing(tmp_path: Path):
             ])
             assert dims["done"][1]["value"] == 12 and dims["done"][2]["value"] == 3
             assert "nearest one is" in await c.fails("modify_sketch", operations=[{"op": "trim", "at": [50, 50]}])
+            await c.call("sketch", entities=[{"type": "line", "from": [-15, 3], "to": [-12, 3]}, {"type": "line", "from": [-10, -5], "to": [-10, 8]},
+                                             {"type": "circle", "center": [-14, -4], "radius": 0.5}])
+            more = await c.call("modify_sketch", operations=[
+                {"op": "extend", "at": [-12.5, 3]}, {"op": "split", "at": [-10, 0]},
+                {"op": "pattern", "items": ["seg@-13.5,-4"], "count": [2, 1], "spacing": [-2, 0]},
+                {"op": "pattern", "items": ["seg@-13.5,-4"], "center": [-14, 0], "count": 4},
+            ])
+            assert more["done"][1]["segments_added"] == 1 and more["done"][3]["segments_added"] == 3  # split in two; 3 more circles
+            lines = [s for s in (await c.call("list_sketch", near=[-11, 3], limit=3))["segments"] if s["type"] == "line"]
+            assert any(s["end"] == [-10.0, 3.0] or s["start"] == [-10.0, 3.0] for s in lines)  # extended to the vertical line
             await c.call("set_dimensions", values={dims["done"][2]["dimension"]: 4})  # sketch stays open
             assert (await c.call("finish_sketch"))["closed_regions"] >= 1
 

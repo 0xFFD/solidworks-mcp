@@ -49,6 +49,7 @@ All notable changes to this project are documented here. The format follows
   by `list_bodies` and usable as `body:Name` split tools).
 - `edit_feature` also resizes Hole Wizard holes (keeping their positions and table), changes hole depth and
   end condition, draft angles, chamfer angles, and the diameter and twist of circular-profile sweeps.
+- `modify_sketch` also extends and splits segments and makes linear and circular sketch patterns.
 - `hole` takes positions on several faces in one call and makes one Hole Wizard feature per face.
 - `design_guide('sheet_metal')`: bend radii for 5052, 6061, 2024 and 7075 aluminium, stainless and
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.

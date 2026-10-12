@@ -726,6 +726,45 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
             doc.ViewZoomtofit2()
         if _signature(sk) == before:
             raise SwError(f"Nothing was trimmed at {at}. The point must lie on a segment.")
+    elif kind in ("extend", "split"):
+        at = op.get("at")
+        if not at:
+            raise SwError(f"{kind} needs at:[x, y], a point on the segment ({'near the end to extend' if kind == 'extend' else 'where to split it'}).")
+        before = _signature(sk)
+        if kind == "extend":
+            zoomed = _pick_segment(doc, sk, at, to_model)
+            sm.SketchExtend(mm(at[0]), mm(at[1]), 0.0)
+            if zoomed:
+                doc.ViewZoomtofit2()
+        else:
+            _sketch_item(sk, f"seg@{at[0]},{at[1]}").Select4(False, None)
+            doc.SplitOpenSegment(mm(at[0]), mm(at[1]), 0.0)
+        if _signature(sk) == before:
+            raise SwError(f"Nothing was {'extended' if kind == 'extend' else 'split'} at {at}." + (" The segment must reach another segment when extended." if kind == "extend" else ""))
+    elif kind == "pattern":
+        _select_items(doc, sk, items)
+        if op.get("center") is not None:  # circular, about center
+            c = op["center"]
+            seed = _seg_geom(_sketch_item(sk, items[0]))
+            ref = seed.get("center") or seed.get("start")
+            if ref is None:
+                raise SwError("A circular sketch pattern needs a line, arc or circle as the first item.")
+            count = int(op.get("count", 2))
+            total = math.radians(float(op.get("angle", 360)))
+            step = total / count if abs(total - 2 * math.pi) < 1e-9 else total / max(count - 1, 1)
+            radius = math.dist(ref, c)
+            if radius < 1e-9:
+                raise SwError("The pattern centre must not be the first item's own centre.")
+            ok = doc.CreateCircularSketchStepAndRepeat(mm(radius), math.atan2(c[1] - ref[1], c[0] - ref[0]), count, step, True, "")
+        else:
+            nx, ny = (int(v) for v in (op.get("count") or [2, 1]))
+            dx, dy = (mm(v) for v in (op.get("spacing") or [0, 0]))
+            ang = math.radians(float(op.get("angle", 0)))
+            # spacings must be positive; a negative one turns its direction round
+            ax, ay = ang + (math.pi if dx < 0 else 0.0), ang + math.pi / 2 + (math.pi if dy < 0 else 0.0)
+            ok = doc.CreateLinearSketchStepAndRepeat(nx, ny, abs(dx), abs(dy), ax, ay, "")
+        if not ok or len(_segments(sk)) == n:
+            raise SwError("SolidWorks could not pattern the items.")
     elif kind == "offset":
         d = float(op.get("distance", 0))
         if not d:
@@ -766,7 +805,7 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
     elif kind == "dimension":
         out.update(_dimension(doc, sk, op, items, to_model))
     else:
-        raise SwError(f"Unknown sketch operation '{kind}'. Use delete, move, copy, rotate, trim, offset, convert, fillet, chamfer, "
+        raise SwError(f"Unknown sketch operation '{kind}'. Use delete, move, copy, rotate, trim, extend, split, pattern, offset, convert, fillet, chamfer, "
                       "construction, relation or dimension.")
     doc.ClearSelection2(True)
     change = len(_segments(sk)) - n
@@ -785,6 +824,10 @@ def modify_sketch(
         "{op:'delete', items}, {op:'move', items, by:[dx, dy]}, {op:'copy', items, by, count}, "
         "{op:'rotate', items, center:[x, y], angle (deg, counterclockwise), copy}, "
         "{op:'trim', at:[x, y]} (removes the piece of the segment under the point, up to the nearest intersections), "
+        "{op:'extend', at:[x, y]} (extends the segment from its end nearest the point to the next segment), "
+        "{op:'split', at:[x, y]} (splits an open segment at the point), "
+        "{op:'pattern', items, count:[nx, ny], spacing:[dx, dy], angle} (linear sketch pattern) or "
+        "{op:'pattern', items, center:[x, y], count, angle (total, default 360)} (circular, first item a circle, arc or line), "
         "{op:'offset', items (sketch segments or model edges/faces), distance (mm; the sign picks the side), both_sides, chain}, "
         "{op:'convert', refs:['edge@x,y,z' | 'face:N', ...]} (project model edges into the sketch), "
         "{op:'fillet', items:['pt@x,y'], radius}, {op:'chamfer', items:['pt@x,y'], distance}, "
@@ -793,7 +836,7 @@ def modify_sketch(
         "{op:'dimension', items, value, orientation:'aligned'|'horizontal'|'vertical', at:[x, y]} "
         "(one line: length; circle: diameter; arc: radius; two items: distance, or the angle between two lines in degrees)."))],
 ) -> dict:
-    """Edit the open sketch: delete, move, copy, rotate, trim, offset, convert model edges, sketch fillets and
+    """Edit the open sketch: delete, move, copy, rotate, trim, extend, split, pattern, offset, convert model edges, sketch fillets and
     chamfers, construction geometry, relations and driving dimensions (their names work with set_dimensions)."""
     doc = SW.active()
     sk = active_sketch(doc)
