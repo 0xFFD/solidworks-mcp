@@ -51,7 +51,8 @@ Typical part workflow:
    export-control marking), equations, configurations (variants: set_dimensions and feature_action take
    configurations=[...]), document_settings (units, ASME or ISO drafting standard),
    add_datum, add_datum_target, add_geometric_tolerance (composite frames, projected zones) and
-   add_surface_finish (GD&T on part or assembly component faces, carried into drawings).
+   add_surface_finish (GD&T on part or assembly component faces, carried into drawings); dimxpert applies a
+   complete automatic MBD scheme from chosen datum faces.
 7. Output: save_document (native files), export (STEP AP242/AP214/AP203, IGES, Parasolid, STL, 3MF, PDF,
    DXF, DWG, PNG), create_drawing (standard views, model dimensions and GD&T), section_view, add_note;
    detail_view, projected_view, auxiliary_view, broken_view, breakout_section, add_view (incl. flat_pattern), sheets, drawing_dimension, view_dimensions,

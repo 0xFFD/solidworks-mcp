@@ -229,6 +229,86 @@ def add_surface_finish(
     return {"surface_finish": roughness, "face": face}
 
 
+def _dimxpert_part(doc: Any) -> Any:
+    # re-fetched after every change: DeleteAllTolerances leaves the previous object empty
+    cfg = doc.ConfigurationManager.ActiveConfiguration.Name
+    mgr = doc.Extension.DimXpertManager(cfg, True)
+    if mgr is None:
+        raise SwError("DimXpert is not available for this part.")
+    return SW.cast(mgr.DimXpertPart, "IDimXpertPart")
+
+
+_UNIT_MM = {0: 1.0, 1: 10.0, 2: 1000.0, 3: 25.4, 4: 304.8}  # swLengthUnit_e: mm, cm, m, in, ft
+
+
+def _dimxpert_annotations(doc: Any, part: Any) -> list[dict]:
+    """DimXpert reports values in document units; returned here in mm (angles in degrees)."""
+    k = _UNIT_MM.get(doc.Extension.GetUserPreferenceInteger(SW.C.swUnitsLinear, 0), 1.0)
+    out = []
+    for a in part.GetAnnotations() or []:
+        a = SW.cast(a, "IDimXpertAnnotation")
+        name = a.Name
+        row: dict[str, Any] = {"name": name, "kind": re.sub(r"\d*@.*$", "", name)}
+        if (label := re.search(r"\(([A-Z]{1,2})\)$", name)) and row["kind"] == "Datum":
+            row["label"] = label.group(1)
+        f = 1.0 if row["kind"].lower().startswith("angle") else k
+
+        def conv(v: float, f: float = f) -> float:
+            return v * f
+        if (d := SW.try_cast(a, "IDimXpertDimensionTolerance")) is not None:
+            row["nominal"] = round(conv(d.GetNominalValue()), 4)
+            pm = d.GetPlusAndMinusTolerance(0.0, 0.0)
+            if isinstance(pm, tuple) and len(pm) >= 3 and pm[0]:
+                row["plus"], row["minus"] = round(conv(pm[1]), 4), round(conv(pm[2]), 4)
+        elif (t := SW.try_cast(a, "IDimXpertTolerance")) is not None:
+            row["tolerance"] = round(t.Tolerance * k, 4)
+        out.append(row)
+    return out
+
+
+@tool(WRITES)
+def dimxpert(
+    action: Annotated[Literal["auto", "list", "clear"], Field(description="auto: apply an automatic dimension scheme; list: report the scheme; clear: delete it.")] = "auto",
+    datums: Annotated[list[str] | None, Field(description="auto: primary, secondary and tertiary datum faces ('face@x,y,z', planar or cylindrical); at least the primary.")] = None,
+    tolerance: Annotated[Literal["geometric", "plus_minus"], Field(description="Geometric: datums with flatness, perpendicularity and position tolerances. plus_minus: size and location dimensions.")] = "geometric",
+    part_type: Annotated[Literal["prismatic", "turned"], Field(description="Prismatic (machined block) or turned (lathe part).")] = "prismatic",
+    pattern: Annotated[Literal["linear", "polar"], Field(description="How hole patterns are located.")] = "linear",
+) -> dict:
+    """DimXpert model-based definition: recognises manufacturing features (planes, holes, patterns) and applies a
+    complete datum, size and geometric tolerance scheme to the 3D model for MBD and inspection (ASME Y14.41 style).
+    Faces turn green when fully toleranced. Replaces any existing DimXpert scheme. Tolerance values come from the
+    DimXpert options of the document (block tolerances, default ASME inch), so review them against the drawing's
+    general tolerances."""
+    doc = SW.active("part")
+    if action == "clear":
+        _dimxpert_part(doc).DeleteAllTolerances()
+        return {"annotations": []}
+    if action == "list":
+        part = _dimxpert_part(doc)
+        return {"features": part.GetFeatureCount(), "annotations": _dimxpert_annotations(doc, part)}
+    if not datums or len(datums) > 3:
+        raise SwError("An automatic scheme needs 1 to 3 datum faces, primary first.")
+    refs = [g.resolve(doc, r) for r in datums]
+    _dimxpert_part(doc).DeleteAllTolerances()
+    part = _dimxpert_part(doc)
+    opt = SW.cast(part.GetAutoDimSchemeOption(), "IDimXpertAutoDimSchemeOption")
+    dc = SW.C  # the scheme enums are registered with the other SolidWorks constants once the library is loaded
+    opt.PartType = dc.swDimXpertAutoDimSchemePartType_Prismatic if part_type == "prismatic" else dc.swDimXpertAutoDimSchemePartType_Turned
+    opt.ToleranceType = dc.swDimXpertAutoDimSchemeToleranceType_Geometric if tolerance == "geometric" else dc.swDimXpertAutoDimSchemeToleranceType_PlusMinus
+    opt.PatternType = dc.swDimXpertAutoDimSchemePatternType_Linear if pattern == "linear" else dc.swDimXpertAutoDimSchemePatternType_Polar
+    opt.ScopeAllFeature = True
+    doc.ClearSelection2(True)
+    for i, r in enumerate(refs):  # the datums are taken from selection marks 1, 2 and 3
+        r.select(doc, mark=i + 1)
+    part.AutoDimensionScheme(opt)  # returns False even when the scheme is applied; judge by the annotations
+    doc.ClearSelection2(True)
+    part = _dimxpert_part(doc)
+    anns = _dimxpert_annotations(doc, part)
+    if not anns:
+        raise SwError("DimXpert applied no annotations. Pick planar or cylindrical datum faces of the part's main features.")
+    return {"features": part.GetFeatureCount(), "annotations": anns}
+
+
 @tool(WRITES)
 def add_note(
     text: Annotated[str, Field(description="Note text. Use for general notes, e.g. 'UNLESS OTHERWISE SPECIFIED: BREAK SHARP EDGES 0.2-0.5'.")],

@@ -70,6 +70,7 @@ class SolidWorks:
         self.visible = visible
         self._app: Any = None
         self._mod: Any = None
+        self._dx: Any = None
         self._C: Any = None
 
     # ------------------------------------------------------------------ connection
@@ -126,7 +127,7 @@ class SolidWorks:
             self.app  # noqa: B018 - connect and load the type library
         import pythoncom
 
-        cls = getattr(self._mod, iface)
+        cls = getattr(self._dimxpert() if iface.startswith("IDimXpert") else self._mod, iface)
         if isinstance(obj, cls):
             return obj
         raw = getattr(obj, "_oleobj_", obj)
@@ -137,6 +138,32 @@ class SolidWorks:
         except pythoncom.com_error:
             pass
         return cls(raw)
+
+    def try_cast(self, obj: Any, iface: str) -> Any:
+        """Like cast, but None when the object does not implement `iface` (to tell subtypes apart)."""
+        import pythoncom
+
+        cls = getattr(self._dimxpert() if iface.startswith("IDimXpert") else self._mod, iface)
+        try:
+            return cls(getattr(obj, "_oleobj_", obj).QueryInterface(cls.CLSID, pythoncom.IID_IDispatch))
+        except pythoncom.com_error:
+            return None
+
+    def _dimxpert(self) -> Any:
+        """The DimXpert type library (swdimxpert.tlb), loaded from the SolidWorks installation on first use."""
+        if self._dx is None:
+            import os
+
+            import pythoncom
+            import win32com.client as wc
+
+            path = os.path.join(self.app.GetExecutablePath(), "swdimxpert.tlb")  # the installation folder
+            try:
+                attr = pythoncom.LoadTypeLib(path).GetLibAttr()
+            except pythoncom.com_error:
+                raise SwError(f"The DimXpert type library was not found at {path}.") from None
+            self._dx = wc.gencache.EnsureModule(str(attr[0]), 0, attr[3], attr[4])
+        return self._dx
 
     def cast_all(self, objs: Any, iface: str) -> list[Any]:
         if not objs:

@@ -838,6 +838,55 @@ def test_weldment_caps_and_gussets(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_dimxpert_schemes(tmp_path: Path):
+    """Automatic DimXpert schemes on a drilled plate (prismatic) and a stepped shaft (turned)."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [0, 0], "corner2": [80, 50]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=10)
+            await c.call("start_sketch", on="face@40,10,-25")
+            await c.call("sketch", coords="model", entities=[{"type": "circle", "center": [x, 10, z], "diameter": 6.6} for x in (15, 65) for z in (-15, -35)])
+            await c.call("finish_sketch")
+            await c.call("extrude", cut=True, end="through_all")
+            datums = ["face@40,0,-25", "face@40,5,0", "face@0,5,-25"]
+            geo = (await c.call("dimxpert", datums=datums))["annotations"]
+            assert [a["label"] for a in geo if a["kind"] == "Datum"] == ["A", "B", "C"]
+            kinds = {a["kind"] for a in geo}
+            assert {"Flatness", "Perpendicularity", "Position", "Diameter"} <= kinds
+            sizes = sorted(a["nominal"] for a in geo if a["kind"] == "DistanceBetween")
+            assert sizes == pytest.approx([10, 50, 80])
+            assert any(a["kind"] == "Diameter" and a["nominal"] == pytest.approx(6.6) for a in geo)
+            pm = (await c.call("dimxpert", datums=datums, tolerance="plus_minus"))["annotations"]
+            assert "Position" not in {a["kind"] for a in pm}  # replaced, not added to
+            assert sorted(a["nominal"] for a in pm if "Hole Pattern" in a["name"] and a["kind"] == "DistanceBetween") == pytest.approx([15, 15])
+            assert (await c.call("dimxpert", action="list"))["annotations"] == pm
+            assert (await c.call("dimxpert", action="clear"))["annotations"] == []
+            assert "1 to 3 datum faces" in await c.fails("dimxpert")
+        finally:
+            await c.call("close_document")
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "circle", "center": [0, 0], "diameter": 30}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=40)
+            await c.call("start_sketch", on="face@0,0,40")
+            await c.call("sketch", coords="model", entities=[{"type": "circle", "center": [0, 0, 40], "diameter": 20}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=30)
+            shaft = (await c.call("dimxpert", datums=["face@15,0,20", "face@0,0,0"], part_type="turned"))["annotations"]
+            assert sorted(a["nominal"] for a in shaft if a["kind"] == "Diameter") == pytest.approx([20, 30])
+            assert any(a["kind"] == "CircularRunout" for a in shaft)
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

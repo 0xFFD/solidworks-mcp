@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `dimxpert` applies an automatic DimXpert scheme (geometric or plus/minus, prismatic or turned) from chosen
+  datum faces and reports each annotation with its nominal and tolerance, for model-based definition; `list`
+  and `clear` read and remove it.
 - Cam mates: `add_mate(type="cam")` keeps a follower face, edge or vertex on a cam's closed chain of tangent
   faces (picking any one face of the lobe). A plain or eccentric cylinder is refused, because SolidWorks crashes
   on it; use a tangent mate there.
