@@ -404,7 +404,7 @@ def test_sheet_metal(tmp_path: Path):
             hole = await c.call("forming_tool", tool_name="extruded hole", position=[25, 0, 0])
             assert dimple["type"] == hole["type"] == "FormToolInstance"
             before = len((await c.call("list_features"))["features"])
-            assert "could not be placed" in await c.fails("forming_tool", tool_name="dimple", position=[48, 0, 28])
+            assert "could not be placed" in await c.fails("forming_tool", tool_name="dimple", position=[44, 0, 26])  # into the bends
             assert len((await c.call("list_features"))["features"]) == before
             assert "Available:" in await c.fails("forming_tool", tool_name="no such tool", position=[0, 0, 0])
         finally:
