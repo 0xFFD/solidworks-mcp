@@ -242,7 +242,8 @@ def test_sketch_references():
     from solidworks_mcp.tools_sketch import _SEG_RE
 
     assert _SEG_RE.match("seg:3").group(2) == "3"
-    assert _SEG_RE.match("pt@ -1.5, 2e-3").groups()[2:] == ("-1.5", "2e-3")
+    assert _SEG_RE.match("pt@ -1.5, 2e-3").groups()[2:] == ("-1.5", "2e-3", None)
+    assert _SEG_RE.match("seg@40, 20.5, -3").groups()[2:] == ("40", "20.5", "-3")  # 3D sketches
     assert _SEG_RE.match("SEG@4,5") is not None
     for bad in ("seg", "seg:", "seg@1", "face@1,2,3", "pt:1.5"):
         assert _SEG_RE.match(bad) is None, bad

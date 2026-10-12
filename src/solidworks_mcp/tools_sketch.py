@@ -866,7 +866,8 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
 def modify_sketch(
     operations: Annotated[list[dict[str, Any]], Field(description=(
         "Edits to the open sketch, applied in order. Items are 'seg:N' / 'pt:N' (indices from list_sketch, which change after "
-        "every edit) or 'seg@x,y' / 'pt@x,y' (the segment or point nearest that sketch point, mm), plus 'origin'. Operations: "
+        "every edit) or 'seg@x,y' / 'pt@x,y' (the segment or point nearest that sketch point, mm; in a 3D sketch 'seg@x,y,z', "
+        "model mm), plus 'origin'. Operations: "
         "{op:'delete', items}, {op:'move', items, by:[dx, dy]}, {op:'copy', items, by, count}, "
         "{op:'rotate', items, center:[x, y], angle (deg, counterclockwise), copy}, "
         "{op:'trim', at:[x, y]} (removes the piece of the segment under the point, up to the nearest intersections), "
