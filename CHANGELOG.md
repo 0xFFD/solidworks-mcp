@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `drawing_table(kind='general')` inserts a table of given cells, or a tabulated dash-number table of the model's
+  configurations from chosen dimensions.
 - Gauge tables without Excel: `gauge_table` reads SolidWorks .xlsx gauge tables directly, and `sheet_metal_base(gauge=...)`
   takes thickness and an allowed bend radius from them.
 - `configuration_table` builds or updates dash-numbered configurations from rows of dimension values, suppressed

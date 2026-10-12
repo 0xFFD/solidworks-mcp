@@ -994,7 +994,9 @@ _ANCHORS = {"top_left": "swBOMConfigurationAnchor_TopLeft", "top_right": "swBOMC
 
 @tool(WRITES)
 def drawing_table(
-    kind: Annotated[Literal["bom", "revision", "hole"], Field(description="bom: parts list of an assembly view (with balloons); revision: revision block; hole: hole table of a face seen in a view.")],
+    kind: Annotated[Literal["bom", "revision", "hole", "general"], Field(description=(
+        "bom: parts list of an assembly view (with balloons); revision: revision block; hole: hole table of a face seen in a view; "
+        "general: a table of given cells, or a tabulated (dash-number) table of the model's configurations."))],
     view: Annotated[str | None, Field(description="bom and hole: the view the table belongs to.")] = None,
     position: Annotated[list[float] | None, Field(description="Table corner [x, y] in sheet mm (the corner given by anchor).")] = None,
     anchor: Annotated[Literal["top_left", "top_right", "bottom_left", "bottom_right"], Field(description="Which table corner position refers to.")] = "top_right",
@@ -1003,6 +1005,10 @@ def drawing_table(
     face: Annotated[str | None, Field(description="hole: model face holding the holes ('face@x,y,z'), seen square in the view.")] = None,
     origin: Annotated[str | None, Field(description="hole: model vertex for the X/Y datum, as a point 'x,y,z' in mm (the nearest vertex is used); default is a corner of the face.")] = None,
     template: Annotated[str | None, Field(description="Table template file; defaults: bom-standard, standard revision block, standard hole table--letters.")] = None,
+    cells: Annotated[list[list[str]] | None, Field(description="general: the table text, row by row; the first row is the header.")] = None,
+    dimensions: Annotated[dict[str, str] | None, Field(description=(
+        "general: a tabulated drawing table of the model's configurations instead of cells, {dimension: column heading}, "
+        "e.g. {'D1@Sketch1': 'L', 'D1@Boss-Extrude1': 'T'}; one row per configuration."))] = None,
 ) -> dict:
     """Tables on the active drawing sheet: bill of materials with balloons, revision block with revision
     rows, or a hole table with tags, positions from a datum corner and hole callouts."""
@@ -1016,6 +1022,37 @@ def drawing_table(
     if kind in ("bom", "hole") and not view:
         raise SwError(f"A {kind} table needs view=.")
     out: dict[str, Any] = {"table": kind}
+    if kind == "general":
+        if dimensions:
+            from .tools_inspect import configuration_table
+
+            first = SW.cast(SW.cast(drw.GetFirstView(), "IView").GetNextView(), "IView")
+            model = SW.app.GetOpenDocumentByName(first.GetReferencedModelName()) if first is not None else None
+            if model is None:
+                raise SwError("The drawing has no model view to tabulate.")
+            here = doc.GetTitle()
+            SW.app.ActivateDoc3(SW.cast(model, "IModelDoc2").GetTitle(), False, 0, 0)
+            try:
+                rows = configuration_table(columns=list(dimensions))["configurations"]
+            finally:
+                SW.app.ActivateDoc3(here, False, 0, 0)
+            cells = [["CONFIG", *dimensions.values()]] + [[r["config"], *[f"{r[k]:g}" for k in dimensions]] for r in rows]
+        if not cells or not cells[0]:
+            raise SwError("A general table needs cells (rows of text) or dimensions (to tabulate configurations).")
+        ncol = max(len(r) for r in cells)
+        t = drw.InsertTableAnnotation2(use_anchor, x, y, anc, str(app().path(template, must_exist=True)) if template else "", len(cells), ncol)
+        if t is None:
+            raise SwError("SolidWorks could not insert the table.")
+        ta = SW.cast(t, "ITableAnnotation")
+        for r, row in enumerate(cells):
+            for col in range(ncol):
+                ta.SetText(r, col, str(row[col]) if col < len(row) else "")
+        doc.GraphicsRedraw2()
+        got = [[ta.DisplayedText2(r, col, True) for col in range(ncol)] for r in range(len(cells))]
+        if [[str(v) for v in row] + [""] * (ncol - len(row)) for row in cells] != got:
+            raise SwError(f"The table text did not come out as given: {got}")
+        out.update(rows=len(cells), columns=ncol, cells=got)
+        return out
     if kind == "bom":
         v = _view(drw, view)
         if doc_kind(_view_model(v)) != "assembly":

@@ -1178,6 +1178,13 @@ def test_gauges_and_configuration_table(tmp_path: Path):
                 await c.call("configurations", action="activate", name=cfg)
                 assert (await c.call("mass_properties"))["volume_mm3"] == pytest.approx(vol)  # -003 keeps the hole -002 suppressed
             assert (tmp_path / "plates.csv").read_text().splitlines()[0] == f"config,{length},{thick}"
+            # the tabulated drawing: one dash-number row per configuration
+            await c.call("save_document", path="plates.sldprt")
+            await c.call("create_drawing", sheet="A3", isometric=False)
+            tab = await c.call("drawing_table", kind="general", dimensions={length: "L", thick: "T"}, position=[330, 120])
+            assert tab["cells"][0] == ["CONFIG", "L", "T"] and ["-003", "120", "8"] in tab["cells"]
+            assert "needs cells" in await c.fails("drawing_table", kind="general")
+            await c.call("close_document")
         finally:
             await c.call("close_document")
 
