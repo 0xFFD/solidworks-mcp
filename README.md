@@ -111,7 +111,7 @@ All lengths are millimetres and all angles degrees, in both directions, whatever
 | Features | `extrude`, `revolve`, `sweep`, `helix`, `loft`, `fillet`, `chamfer`, `shell`, `draft`, `hole`, `cosmetic_thread`, `linear_pattern`, `circular_pattern`, `driven_pattern` (table, sketch or curve driven), `mirror`, `ref_plane`, `ref_axis` |
 | Multibody and surfaces | `list_bodies`, `combine` (add, subtract, common), `move_body` (move, rotate, copy), `split_body` (by planes, faces, sketches or surfaces), `delete_body`, `surface` (extrude, revolve, loft, planar, offset) |
 | Weldments | `structural_member`, `trim_members`, `end_cap`, `gusset`, `cut_list` |
-| Sheet metal | `sheet_metal_base` (incl. gauge tables), `gauge_table`, `edge_flange`, `miter_flange`, `hem`, `forming_tool`, `sketched_bend`, `closed_corner`, `convert_to_sheet_metal`, `flat_pattern` (info, flatten, fold, DXF/DWG export) |
+| Sheet metal | `sheet_metal_base` (incl. gauge tables), `gauge_table`, `edge_flange`, `miter_flange`, `jog`, `hem`, `forming_tool`, `sketched_bend`, `closed_corner`, `convert_to_sheet_metal`, `flat_pattern` (info, flatten, fold, DXF/DWG export) |
 | Model tree and edits | `list_features`, `dimensions`, `set_dimensions`, `edit_feature` (end conditions, depths, directions, radii, thickness, pattern counts, hole sizes, draft angles, sweep and loft definitions), `configurations`, `configuration_table` (dash-number families, CSV), `equations`, `feature_action` (suppress, unsuppress, delete; per configuration), `undo`, `rebuild` |
 | Geometry and checks | `list_faces`, `list_edges`, `measure`, `mass_properties`, `bounding_box`, `check_geometry`, `tolerance_stack` (worst case and RSS), `screenshot` |
 | Engineering data | `list_materials`, `set_material`, `custom_properties` |
@@ -119,7 +119,7 @@ All lengths are millimetres and all angles degrees, in both directions, whatever
 | Drawings | `create_drawing`, `drawing_views`, `section_view`, `detail_view`, `projected_view`, `auxiliary_view`, `broken_view`, `breakout_section`, `add_view` (model or flat pattern), `sheets`, `drawing_dimension`, `view_dimensions` (list, arrange, move, tolerance, precision), `drawing_table` (BOM with balloons, revision block, hole table, general and tabulated dash-number tables) |
 | Assemblies | `insert_component`, `list_components`, `add_mate` (including limit, width, symmetric, gear, slot, hinge, rack and pinion, screw, universal joint and cam mates), `exploded_view`, `subassembly` (form, dissolve), `interference_check`, `bom` (parts list with mass budget) |
 
-102 tools and one prompt (`design`) in total. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`) so clients can approve reads automatically and ask before deleting or closing.
+103 tools and one prompt (`design`) in total. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`) so clients can approve reads automatically and ask before deleting or closing.
 
 ### Picking faces and edges
 
@@ -167,7 +167,7 @@ Copy the log to write-once storage if you need it to survive a determined admini
 
 **Read-only mode.** `--read-only` allows only the tools that do not change models or files, for design reviews and audits.
 
-**No code execution.** There is no tool that runs macros, scripts or arbitrary API calls. Everything the agent can do is one of the 102 tools above.
+**No code execution.** There is no tool that runs macros, scripts or arbitrary API calls. Everything the agent can do is one of the 103 tools above.
 
 **Engineering standards.** `document_settings` switches between ASME Y14.5 and ISO drafting standards, `create_drawing` supports third and first angle projection, GD&T is applied to model faces (model-based definition), holes come from the standard Hole Wizard tables rather than hand-drawn circles, `finish_sketch(fully_define=true)` produces fully defined sketches, and `check_geometry` runs the SolidWorks body check before release.
 
@@ -178,7 +178,7 @@ Copy the log to write-once storage if you need it to survive a determined admini
 The tools cover the common path from a blank part to a released drawing. Plenty of SolidWorks is not exposed yet, and an agent cannot do the following:
 
 - **Other modelling environments.** Mould tools and routing are not available, and weldment members can be trimmed or extended to meet at corners but not end-trimmed at T-joints (SolidWorks' end trim does nothing through the API; draw T-joints in one sketch so structural_member trims them). Surfaces can be created and used to split bodies, but not knitted, trimmed, filled or thickened. 3D sketches take relations (including along X, Y and Z) but no driving dimensions; their geometry is placed at exact coordinates. Sheet metal gauge tables and Excel design tables need Microsoft Excel and are not supported.
-- **Sheet metal beyond flanges.** Base and edge flanges, hems, sketched bends, flat patterns and DXF blanks work. Jogs are not available (build one from two `sketched_bend`s), gauge tables set thickness and bend radius (read without Excel; the table's K-factor applies to edge flanges), forming tools come from the SolidWorks design library (making new ones is not supported), and miter flanges take a straight profile only. Base-flange bends use the SolidWorks default K-factor (0.5); only edge flanges take their own.
+- **Sheet metal beyond flanges.** Base and edge flanges, hems, sketched bends, flat patterns and DXF blanks work. Jogs are built from two sketched bends solved to the requested offset (SolidWorks' own jog feature does not work through the API), gauge tables set thickness and bend radius (read without Excel; the table's K-factor applies to edge flanges), forming tools come from the SolidWorks design library (making new ones is not supported), and miter flanges take a straight profile only. Base-flange bends use the SolidWorks default K-factor (0.5); only edge flanges take their own.
 - **Editing what already exists.** `edit_feature` redefines extrudes, cuts, revolves, fillets, chamfers, shells, patterns, Hole Wizard holes (size, depth, end condition), drafts, sweeps (diameter, twist, profile and path) and lofts (profiles in order, close). Reference geometry changes through its dimensions only.
 - **Detailed sketch work.** Spline fit points can be moved and added and their tangents set, sketch blocks can be made, placed and saved as block files, and reference pictures can be placed for tracing. Engraved text is placed one character at a time.
 - **Advanced features.** Fillets can be constant, asymmetric, conic, variable (linear between the two ends of one edge), face or full round, but not setback (SolidWorks accepts the setback distances through the API but refuses to rebuild with them). Holes go on planar faces (one feature per face) and curved faces such as tube walls (one feature per hole, drilled square to the surface). Bodies can be combined, split, moved, copied and deleted.

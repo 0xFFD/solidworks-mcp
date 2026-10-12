@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `jog` steps a sheet off its plane by a given offset with two opposite sketched bends, solving their spacing
+  until the measured offset matches (joggles over doublers and flanges).
 - `drawing_table(kind='general')` inserts a table of given cells, or a tabulated dash-number table of the model's
   configurations from chosen dimensions.
 - Gauge tables without Excel: `gauge_table` reads SolidWorks .xlsx gauge tables directly, and `sheet_metal_base(gauge=...)`

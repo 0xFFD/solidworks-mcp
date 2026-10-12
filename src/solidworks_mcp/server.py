@@ -41,7 +41,7 @@ Typical part workflow:
    helix (springs, modelled threads). Multibody: list_bodies, combine, move_body, split_body, delete_body,
    surface (surface bodies as split tools), 'body:Name' references.
    edit_feature changes an existing feature's end condition, depth, radius, thickness or pattern count.
-   Sheet metal: sheet_metal_base (closed outline or open profile), edge_flange, miter_flange, hem, forming_tool (dimples, flanged holes, louvres, ribs), sketched_bend, closed_corner, convert_to_sheet_metal, flat_pattern (blank size,
+   Sheet metal: sheet_metal_base (closed outline or open profile), edge_flange, miter_flange, jog (joggles), hem, forming_tool (dimples, flanged holes, louvres, ribs), sketched_bend, closed_corner, convert_to_sheet_metal, flat_pattern (blank size,
    flatten, DXF export); design_guide('sheet_metal') has bend radii and a tray recipe.
 4. Pick faces and edges with list_faces / list_edges (indices change after every feature) or by point:
    "face@x,y,z", "edge@x,y,z". Planes: "plane:Front|Top|Right" or any plane name.
