@@ -620,6 +620,16 @@ def test_gdt_and_fillets(tmp_path: Path):
             await c.call("close_document")
             await c.call("new_document", kind="part")
             await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-40, -25], "corner2": [40, 25]}])
+            await c.call("finish_sketch")
+            block = (await c.call("extrude", depth=20))["volume_mm3"]
+            conic = await c.call("fillet", radius=5, conic_rho=0.5, edges=["edge@0,20,25"])  # parabolic blend: 1/3 of the corner triangle
+            assert block - conic["volume_mm3"] == pytest.approx(25 / 6 * 80, rel=0.01)
+            asym = await c.call("fillet", radius=6, distance2=3, edges=["edge@0,0,-25"])
+            assert conic["volume_mm3"] - asym["volume_mm3"] == pytest.approx(18 * (1 - 3.14159265 / 4) * 80, rel=0.02)
+            await c.call("close_document")
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
             await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-5, -30], "corner2": [5, 30]}])
             await c.call("finish_sketch")
             rib = (await c.call("extrude", depth=20))["volume_mm3"]

@@ -322,10 +322,12 @@ def fillet(
         "with a full round between two side faces (rib and boss ends)."))] = "constant",
     radii: Annotated[list[float] | None, Field(description="Variable fillet: [radius at start, radius at end] in mm (list_edges gives the edge's start and end).")] = None,
     faces2: Annotated[list[str] | None, Field(description="Face fillet: the second face set.")] = None,
+    distance2: Annotated[float | None, Field(description="Constant: makes an asymmetric fillet with legs radius and distance2 (mm).")] = None,
+    conic_rho: Annotated[float | None, Field(gt=0, lt=1, description="Constant: conic profile with this rho instead of a circular arc (0.5 is a parabola, below is flatter, above is fuller).")] = None,
     tangent_propagation: bool = True,
 ) -> dict:
-    """Fillets: constant radius on edges, variable radius along an edge, face fillets between face sets,
-    and full round fillets."""
+    """Fillets: constant radius on edges (optionally asymmetric or with a conic profile), variable radius
+    along an edge, face fillets between face sets, and full round fillets."""
     doc = SW.active("part")
     C = SW.C
     fm = doc.FeatureManager
@@ -345,6 +347,12 @@ def fillet(
         data = SW.cast(fm.CreateDefinition(C.swFmFillet), "ISimpleFilletFeatureData2")
         data.Initialize(C.swConstRadiusFillet)
         data.DefaultRadius = mm(radius)
+        if distance2 is not None:
+            data.AsymmetricFillet = True
+            data.DefaultDistance = mm(distance2)
+        if conic_rho is not None:
+            data.ConicTypeForCrossSectionProfile = C.swFeatureFilletConicRho
+            data.DefaultConicRhoOrRadius = float(conic_rho)
         data.PropagateToTangentFaces = tangent_propagation
         data.Edges = _dispatch_array(_edges_from(doc, edges, faces))
         return result(doc, fm.CreateFeature(data), "fillet", "The radius may be too large for the adjacent faces.")

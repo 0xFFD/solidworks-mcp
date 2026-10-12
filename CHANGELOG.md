@@ -42,7 +42,7 @@ All notable changes to this project are documented here. The format follows
 - GD&T: composite position and profile frames (`composite`), projected tolerance zones (`projected_zone`),
   `add_datum_target` (point, circular and rectangular targets), and datums and frames on assembly components.
   Drawings import datum targets.
-- `fillet` takes `kind`: variable radius along an edge, face fillets between two face sets, and full round
+- `fillet` makes asymmetric (`distance2`) and conic (`conic_rho`) fillets, and takes `kind`: variable radius along an edge, face fillets between two face sets, and full round
   fillets, each checked to have changed the part.
 - Sheet metal `hem` (closed, open, teardrop, rolled, double) and `sketched_bend` (bend along sketched lines,
   with the fixed side chosen by a point).
