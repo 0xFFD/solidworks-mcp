@@ -774,6 +774,23 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
         if not sp.InsertPoint(*on) or sp.GetPointCount() != count + 1:
             raise SwError(f"SolidWorks could not insert a spline point near {at}.")
         out["inserted"] = [round(to_mm(c), 4) for c in on[:len(at)]]
+    elif kind == "block":
+        base, copies = op.get("base") or [0, 0], op.get("copies") or []
+        if not items:
+            raise SwError("block needs items (the geometry to make a block of), base:[x, y] and copies:[[x, y], ...].")
+        _select_items(doc, sk, items)
+        mu = SW.cast(SW.app.GetMathUtility(), "IMathUtility")
+        defn = sm.MakeSketchBlockFromSelected(mu.CreatePoint(_doubles([mm(base[0]), mm(base[1]), 0.0])))
+        doc.ClearSelection2(True)
+        if defn is None:
+            raise SwError("SolidWorks could not make a block of those items.")
+        defn = SW.cast(defn, "ISketchBlockDefinition")
+        ang = math.radians(float(op.get("angle", 0)))
+        for at in copies:
+            if sm.InsertSketchBlockInstance(defn, mu.CreatePoint(_doubles([mm(at[0]), mm(at[1]), 0.0])), 1.0, ang) is None:
+                raise SwError(f"SolidWorks could not place a block instance at {at}.")
+        out["block"] = SW.cast(defn.GetFeature(), "IFeature").Name if defn.GetFeature() is not None else None
+        out["instances"] = defn.GetInstanceCount()
     elif kind == "rotate":
         c = op.get("center") or [0, 0]
         _select_items(doc, sk, items)
@@ -879,7 +896,7 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
     elif kind == "dimension":
         out.update(_dimension(doc, sk, op, items, to_model))
     else:
-        raise SwError(f"Unknown sketch operation '{kind}'. Use delete, move, copy, rotate, set_point, spline_insert, trim, extend, split, pattern, offset, convert, fillet, chamfer, "
+        raise SwError(f"Unknown sketch operation '{kind}'. Use delete, move, copy, rotate, block, set_point, spline_insert, trim, extend, split, pattern, offset, convert, fillet, chamfer, "
                       "construction, relation or dimension.")
     doc.ClearSelection2(True)
     change = len(_segments(sk)) - n
@@ -906,7 +923,8 @@ def modify_sketch(
         "{op:'offset', items (sketch segments or model edges/faces), distance (mm; the sign picks the side), both_sides, chain}, "
         "{op:'convert', refs:['edge@x,y,z' | 'face:N', ...]} (project model edges into the sketch), "
         "{op:'fillet', items:['pt@x,y'], radius}, {op:'chamfer', items:['pt@x,y'], distance}, "
-        "{op:'set_point', items:['pt@x,y'], to:[x, y]} (put a point at exact coordinates; a spline fit point reshapes the spline "
+        "{op:'block', items, base:[x, y], copies:[[x, y], ...], angle} (make a sketch block and place copies with their base point "
+        "at each point, rotated by angle), {op:'set_point', items:['pt@x,y'], to:[x, y]} (put a point at exact coordinates; a spline fit point reshapes the spline "
         "through it), {op:'spline_insert', items:['seg@x,y'], at:[x, y]} (add a fit point on a spline), "
         "{op:'construction', items, on}, "
         "{op:'relation', type, items} (types: " + ", ".join(RELATIONS) + "), "

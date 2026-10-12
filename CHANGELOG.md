@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `modify_sketch` op `block` makes a sketch block from items and places copies of it at given points.
 - `edit_feature` edits lofts (replace, add or reorder profiles; close) and swaps a sweep's profile or path sketch.
 - `forming_tool` places design-library forming tools (dimples, embosses, flanged holes, louvres, lances, ribs)
   exactly on a sheet metal face, refusing placements that run off the sheet.

@@ -1025,6 +1025,19 @@ def test_spline_editing(tmp_path: Path):
             assert (20.0, 25.0) in pts and tuple(added) in pts and len(pts) == 5
         finally:
             await c.call("close_document")
+        # a sketch block (a cutout with its hole) placed twice more, then extruded
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [0, 0], "corner2": [20, 10]}, {"type": "circle", "center": [10, 5], "diameter": 4}])
+            blk = await c.call("modify_sketch", operations=[{"op": "block", "items": ["seg@10,0", "seg@20,5", "seg@10,10", "seg@0,5", "seg@12,5"],
+                                                              "base": [0, 0], "copies": [[40, 0], [80, 20]]}])
+            assert blk["done"][0]["instances"] == 3
+            await c.call("finish_sketch")
+            assert (await c.call("extrude", depth=5))["volume_mm3"] == pytest.approx(3 * (200 - math.pi * 4) * 5)
+            assert (await c.call("bounding_box"))["size"] == pytest.approx([100, 5, 30])
+        finally:
+            await c.call("close_document")
 
     run(tmp_path, body)
 
