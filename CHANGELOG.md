@@ -31,6 +31,7 @@ All notable changes to this project are documented here. The format follows
   model view or a sheet metal flat pattern with bend lines and notes), `sheets` (add and activate sheets),
   `drawing_dimension` (reference dimensions between model edges in a view) and `drawing_table` (bill of
   materials with balloons, revision block with revision rows, hole table with tags and callouts).
+  `broken_view` shortens long parts between two model points.
   `drawing_views` lists the sheets, and `section_view` reports the number of cut faces and warns when the
   cutting line misses the part.
 - Assemblies: `add_mate` adds limit distance and limit angle mates (travel stops), width, symmetric, gear,
@@ -61,6 +62,9 @@ All notable changes to this project are documented here. The format follows
 - `section_view` drew its cutting line in sheet coordinates inside the view's own sketch, so the line
   landed beside the part and the section showed no cut. It now cuts where asked.
 - `create_drawing(model=...)` failed when the model was not open; it is now loaded first.
+- `create_drawing(scale=...)` was overridden by SolidWorks' automatic view scale; the requested scale is now
+  applied after the views are made and the views are moved back onto the sheet (with a warning when they
+  cannot fit).
 - Section views are placed in the first free gap beside their parent view inside the sheet, clear of its
   dimensions, instead of after the last view in the row (which could push them off the sheet). The bracket
   drawing in the README was regenerated with the corrected section.

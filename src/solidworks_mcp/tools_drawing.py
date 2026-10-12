@@ -309,6 +309,25 @@ def _move_outline(view: Any, left: float | None = None, right: float | None = No
     _set_position(view, px + dx, py + dy)
 
 
+def _fit_views(drw: Any, w: float, h: float, margin: float = 0.01) -> str | None:
+    """Shift every view by the same amount so the group lies on the sheet (alignment is kept)."""
+    vs = [SW.cast(v, "IView") for v in (SW.cast(drw.GetCurrentSheet(), "ISheet").GetViews() or [])]
+    if not vs:
+        return None
+    boxes = [_outline(v) for v in vs]
+    x0, y0 = min(b[0] for b in boxes), min(b[1] for b in boxes)
+    x1, y1 = max(b[2] for b in boxes), max(b[3] for b in boxes)
+    dx = (margin - x0) if x0 < margin else min(0.0, w - margin - x1)
+    dy = (margin - y0) if y0 < margin else min(0.0, h - margin - y1)
+    if dx or dy:
+        for v in vs:
+            px, py = list(v.Position)[:2]
+            _set_position(v, px + dx, py + dy)
+    if x1 - x0 > w - 2 * margin or y1 - y0 > h - 2 * margin:
+        return "The views do not fit on the sheet at this scale; use a smaller scale or a larger sheet."
+    return None
+
+
 def _fit_top_right(view: Any, w: float, h: float, margin: float = 0.015) -> None:
     """Move a view into the upper-right corner of the sheet, halving its scale until it fits."""
     try:
@@ -422,6 +441,11 @@ def create_drawing(
     ok = (drw.Create3rdAngleViews2 if projection == "third" else drw.Create1stAngleViews2)(str(mpath))
     if not ok:
         raise SwError(f"SolidWorks could not create views of {mpath.name}.")
+    fit_note = None
+    if scale:  # the first views auto-scale the sheet; put the requested scale back and keep the views on the sheet
+        sh.SetScale(n, d, True, False)
+        doc.ForceRebuild3(True)
+        fit_note = _fit_views(drw, w, h)
     _inherit_settings(doc, mpath)
     if isometric:
         iso = drw.CreateDrawViewFromModelView3(str(mpath), "*Isometric", w * 0.78, h * 0.72, 0)
@@ -437,6 +461,8 @@ def create_drawing(
     doc.ViewZoomtofit2()
     out: dict[str, Any] = {"drawing": doc.GetTitle(), "model": str(mpath), "projection": projection,
                            "sheet_mm": [round(to_mm(w), 1), round(to_mm(h), 1)], "views": _views(drw)}
+    if fit_note:
+        out["warning"] = fit_note
     if save_as:
         p = a.path(save_as, suffixes=(".slddrw",))
         ok, err, _ = doc.Extension.SaveAs3(str(p), 0, C.swSaveAsOptions_Silent, None, None, 0, 0)
@@ -903,3 +929,43 @@ def drawing_dimension(
     val = d.SystemValue
     return {"dimension": "@".join(d.FullName.split("@")[:2]), "value": round(to_deg(val), 4) if angular else round(to_mm(val), 4),
             "unit": "deg" if angular else "mm"}
+
+
+@tool(WRITES)
+def broken_view(
+    view: Annotated[str, Field(description="View name.")],
+    start: Annotated[list[float], Field(description="Model point [x, y, z] in mm where the removed section begins.")],
+    end: Annotated[list[float], Field(description="Model point [x, y, z] in mm where it ends; the part between the two is cut out of the view.")],
+    style: Annotated[Literal["zigzag", "small_zigzag", "straight", "curve", "jagged"], Field(description="Break line style.")] = "zigzag",
+) -> dict:
+    """Broken view: shorten a long part (spar, stringer, tube, rail) by cutting out a uniform middle
+    section between two model points. The break runs across the direction in which the points differ most
+    on the sheet."""
+    doc = SW.active("drawing")
+    drw = SW.drawing(doc)
+    C = SW.C
+    v = _view(drw, view)
+    before = [round(to_mm(c), 2) for c in _outline(v)]
+    a, b = _to_sheet(v, start), _to_sheet(v, end)
+    px, py = list(v.Position)[:2]
+    horizontal_gap = abs(b[0] - a[0]) >= abs(b[1] - a[1])
+    if max(abs(b[0] - a[0]), abs(b[1] - a[1])) < 1e-4:
+        raise SwError("start and end are at the same place in this view.")
+    # break positions are offsets from the view's position on the sheet
+    p1, p2 = sorted((a[0] - px, b[0] - px) if horizontal_gap else (a[1] - py, b[1] - py))
+    orient = C.swBreakLineVertical if horizontal_gap else C.swBreakLineHorizontal
+    styles = {"zigzag": C.swBreakLine_ZigZag, "small_zigzag": C.swBreakLine_SmallZigZag, "straight": C.swBreakLine_Straight,
+              "curve": C.swBreakLine_Curve, "jagged": C.swBreakLine_Jagged}
+    doc.ClearSelection2(True)
+    doc.Extension.SelectByID2(view, "DRAWINGVIEW", 0, 0, 0, False, 0, None, 0)
+    if v.InsertBreak3(orient, p1, p2, styles[style], 1, False) is None:
+        doc.ClearSelection2(True)
+        raise SwError("SolidWorks could not insert the break; both points must lie within the view.")
+    doc.ClearSelection2(True)
+    doc.Extension.SelectByID2(view, "DRAWINGVIEW", 0, 0, 0, False, 0, None, 0)
+    drw.BreakView()
+    doc.ClearSelection2(True)
+    doc.ForceRebuild3(True)
+    out = _view_result(v)
+    out["outline_before_mm"] = before
+    return out

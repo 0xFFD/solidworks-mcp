@@ -403,10 +403,30 @@ def test_drawing_details(tmp_path: Path):
             assert pdf["bytes"] > 10000
             await c.call("close_document")
 
+            # a long bar at a set scale, shortened with a broken view
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-200, -10], "corner2": [200, 10]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=10)
+            await c.call("save_document", path="bar.sldprt")
+            bar = await c.call("create_drawing", sheet="A3", isometric=False, scale="1:2")
+            assert bar["views"][0]["scale"] == 0.5 and min(v["outline_mm"][0] for v in bar["views"]) >= 0
+            before = bar["views"][0]["outline_mm"]
+            broken = await c.call("broken_view", view=bar["views"][0]["name"], start=[-150, 5, 0], end=[150, 5, 0])
+            o = broken["outline_mm"]
+            assert (before[2] - before[0]) - 150 < (o[2] - o[0]) < (before[2] - before[0]) - 130  # 300 mm cut out at 1:2, plus the break gap
+            span = await c.call("drawing_dimension", view=bar["views"][0]["name"], refs=["edge@-200,5,10", "edge@200,5,10"], orientation="horizontal")
+            assert span["value"] == pytest.approx(400)  # dimensions across the break keep the true length
+            await c.call("close_document")
+            await c.call("close_document", name="bar.SLDPRT")
+
             asm = await c.call("create_drawing", model="assy.sldasm", isometric=False)
             bom = await c.call("drawing_table", kind="bom", view=asm["views"][0]["name"])
             assert bom["balloons"] == 2 and [row[2] for row in bom["rows"][1:]] == ["Mounting block", ""]
             await c.call("close_document")
+            for name in ("assy.SLDASM", "cover.SLDPRT", "block.SLDPRT"):  # models the drawings loaded
+                await c.call("close_document", name=name)
         finally:
             await c.call("sw_info")
 
@@ -460,7 +480,7 @@ def test_advanced_mates_and_explode(tmp_path: Path):
             await c.call("exploded_view", show=False)
             assert (await c.call("interference_check"))["interferences"] == 0
             # a pin centred in a slot, and a hinge between two plates
-            await c.call("save_document", path="assy.sldasm")
+            await c.call("save_document", path="mates.sldasm")
             await c.call("new_document", kind="part")
             await c.call("start_sketch", on="plane:Top")
             await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-40, -20], "corner2": [40, 20]}])
