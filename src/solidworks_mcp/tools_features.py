@@ -522,7 +522,20 @@ def hole(
             else:
                 groups.append((fobj, [raw]))
         if len(groups) > 1:
-            done = [hole(size, members, kind, standard, fastener, None, depth, thread_depth, fit, cosmetic_thread) for _, members in groups]
+            done: list[dict] = []
+            try:
+                for _, members in groups:
+                    done.append(hole(size, members, kind, standard, fastener, None, depth, thread_depth, fit, cosmetic_thread))
+            except SwError:
+                # all or nothing: remove the hole features already made for earlier faces
+                for d in reversed(done):
+                    f = g.feature_by_name(doc, d["feature"])
+                    if f is not None:
+                        doc.ClearSelection2(True)
+                        f.Select2(False, 0)
+                        doc.Extension.DeleteSelection2(C.swDelete_Absorbed)
+                doc.ClearSelection2(True)
+                raise
             return {"features": [d["feature"] for d in done], "holes": sum(d["holes"] for d in done), "faces": len(groups),
                     "table": done[0]["table"], "volume_mm3": done[-1].get("volume_mm3")}
     # face under the first point (Hole Wizard places the hole at the selection point, then we fix it)
@@ -970,6 +983,7 @@ def _dispatch_array(objs: list[Any]) -> Any:
 def _dimension_with_value(f: Any, value: float, skip: list[str]) -> str:
     """Name of the feature's linear dimension that currently has `value` (metres)."""
     C = SW.C
+    found = []
     dd = f.GetFirstDisplayDimension()
     while dd is not None:
         d = SW.cast(SW.cast(dd, "IDisplayDimension").GetDimension2(0), "IDimension")
@@ -977,9 +991,11 @@ def _dimension_with_value(f: Any, value: float, skip: list[str]) -> str:
         v = d.GetSystemValue3(C.swThisConfiguration, None)
         v = v[0] if isinstance(v, (tuple, list)) else v
         if d.GetType() == C.swDimensionParamTypeDoubleLinear and abs(v - value) < 1e-9 and name not in skip:
-            return name
+            found.append(name)
         dd = f.GetNextDisplayDimension(dd)
-    raise SwError(f"Could not find the spacing dimension of {f.Name}; use dimensions() and set_dimensions instead.")
+    if not found:
+        raise SwError(f"Could not find the spacing dimension of {f.Name}; use dimensions() and set_dimensions instead.")
+    return found[0]
 
 
 @tool(WRITES)
@@ -1086,7 +1102,10 @@ def edit_feature(
             # ModifyDefinition rejects new spacings; they are changed through the pattern's dimensions below
             for name, val, prop in (("spacing", spacing, "D1Spacing"), ("spacing2", spacing2, "D2Spacing")):
                 if val is not None:
-                    spacing_dims.append((_dimension_with_value(f, getattr(data, prop), [n for n, _ in spacing_dims]), mm(val)))
+                    # linear pattern dimensions are named D1/D2 (counts) and D3/D4 (spacings of direction 1 and 2)
+                    by_name = f"{'D3' if prop == 'D1Spacing' else 'D4'}@{f.Name}"
+                    dim_name = by_name if doc.Parameter(by_name) is not None else _dimension_with_value(f, getattr(data, prop), [n for n, _ in spacing_dims])
+                    spacing_dims.append((dim_name, mm(val)))
                     changed.append(name)
             if reverse is not None:
                 data.D1ReverseDirection = reverse

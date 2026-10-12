@@ -85,6 +85,13 @@ All notable changes to this project are documented here. The format follows
 - Section views are placed in the first free gap beside their parent view inside the sheet, clear of its
   dimensions, instead of after the last view in the row (which could push them off the sheet). The bracket
   drawing in the README was regenerated with the corrected section.
+- Fixes from a review of this release: detail views drew their circle at the wrong size on views not at 1:1;
+  `add_view` ignored its scale; datum targets and frames on assembly components that are not at the origin
+  failed or were placed away from the part; an invalid composite tolerance left a half-made frame behind;
+  `edit_feature(spacing2=...)` could change direction 1 when both spacings were equal; thick channel profiles
+  were accepted and cached; `sketched_bend` failed when its sketch was still open; sketch dimensions set by
+  `modify_sketch` applied to the active configuration only; and a multi-face `hole` call that failed part way
+  left the holes already made.
 - Features created in sheet metal parts were not found after creation (the flat pattern stays last in
   the tree), which made `ref_plane`, `shell`, `ref_axis` and `loft` report failure there.
 

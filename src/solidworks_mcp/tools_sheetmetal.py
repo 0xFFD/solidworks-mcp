@@ -278,8 +278,10 @@ def sketched_bend(
     C = SW.C
     _sheet_metal_feature(doc)
     p = [mm(c) for c in fixed]
+    name = _select_sketch(doc, sketch)  # closes an open sketch first, which invalidates earlier face objects
     face = g.resolve(doc, "face@{},{},{}".format(*fixed)).obj
-    name = _select_sketch(doc, sketch)
+    doc.ClearSelection2(True)
+    g.select(doc, name if ":" in name else f"sketch:{name}")
     # the fixed side comes from where the face is picked, so select it at the point like a mouse click
     doc.Extension.SelectByID2("", "FACE", p[0], p[1], p[2], True, 0, None, 0)
     sel = SW.cast(doc.SelectionManager, "ISelectionMgr")

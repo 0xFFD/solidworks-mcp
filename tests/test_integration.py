@@ -444,6 +444,7 @@ def test_drawing_details(tmp_path: Path):
             sheets = await c.call("sheets", action="add", name="Flat", size="A4")
             assert sheets["active"] == "Flat"
             await c.call("add_view", orientation="flat_pattern", model="cover.sldprt")
+            assert (await c.call("add_view", orientation="right", model="block.sldprt", scale="1:5"))["scale"] == 0.2
             await c.call("sheets", action="activate", name="Sheet1")
             await c.call("save_document")
             pdf = await c.call("export", path="block.pdf")
@@ -571,7 +572,8 @@ def test_advanced_mates_and_explode(tmp_path: Path):
             await c.call("insert_component", path="gear20.sldprt", position=[0, 120, 0])
             rack = await c.call("add_mate", type="rack_pinion", refs=["edge@rail-1/0,10,10", "face@gear20-2/10,120,2.5"], distance=20)
             assert rack["mate"].startswith("RackPinion")
-            # GD&T on assembly components
+            # GD&T on assembly components, including one that is not at the origin
+            assert (await c.call("add_datum_target", face="face@slotplate-1/-30,-25,10", at=[-30, -25, 10], label="C1"))["datum_target"] == "C1"
             await c.call("add_datum", face="face@rail-1/0,0,0", label="A")
             frame = await c.call("add_geometric_tolerance", face="face@rail-1/0,10,0", characteristic="parallelism", tolerance=0.05, datums=["A"])
             assert frame["feature_control_frame"] == "|parallelism|0.05|A"
@@ -609,6 +611,11 @@ def test_gdt_and_fillets(tmp_path: Path):
             assert (await c.call("add_geometric_tolerance", face="face@-40,5,10", characteristic="profile_surface", tolerance=0.1, datums=["A"],
                                  between=["X", "Y"]))["between"] == ["X", "Y"]
             assert "apply to profile" in await c.fails("add_geometric_tolerance", face="face@10,10,0", characteristic="flatness", tolerance=0.05, applies_to="all_over")
+            assert "no larger than the upper" in await c.fails("add_geometric_tolerance", face="face@-40,5,-5", characteristic="position",
+                                                               tolerance=0.05, composite={"tolerance": 0.1})
+            holes_before = [f["name"] for f in (await c.call("list_features"))["features"] if f["type"] == "HoleWzd"]
+            await c.fails("hole", size="M3", kind="tapped", depth=4, positions=[[-20, 10, -20], [0, 5, 25.5]])  # 2nd point is off the part
+            assert [f["name"] for f in (await c.call("list_features"))["features"] if f["type"] == "HoleWzd"] == holes_before
             assert "Composite frames apply" in await c.fails("add_geometric_tolerance", face="face@10,10,0", characteristic="flatness", tolerance=0.05,
                                                          composite={"tolerance": 0.01})
             for label, at, shape, size in (("A1", [-30, 0, 0], "point", None), ("A2", [30, 0, 0], "circle", [6]), ("A3", [0, 0, 10], "rectangle", [8, 4])):
@@ -635,6 +642,11 @@ def test_gdt_and_fillets(tmp_path: Path):
             assert centres == {(-40.0, -20.0)} | {(p[0], p[2]) for p in table}
             await c.call("driven_pattern", features=[seed["feature"]], curve="edge@0,8,40", count=4, spacing=25)
             assert len([f for f in (await c.call("list_faces", type="cylinder"))["faces"] if f.get("hole")]) == 8
+            grid = await c.call("linear_pattern", features=[seed["feature"]], direction="edge@0,8,-40", count=2, spacing=10,
+                                direction2="edge@-60,8,0", count2=2, spacing2=10)
+            await c.call("edit_feature", feature=grid["feature"], spacing2=15)  # equal spacings: only direction 2 may change
+            dims = {d["name"].split("@")[0]: d["value"] for d in (await c.call("dimensions", feature=grid["feature"]))["dimensions"][grid["feature"]]}
+            assert dims["D3"] == 10 and dims["D4"] == 15
             await c.call("close_document")
 
             # fillets on fresh blocks: exact volumes
@@ -766,6 +778,7 @@ def test_weldment_frame(tmp_path: Path):
             angle = await c.call("structural_member", shape="angle", size=[25, 25, 3])
             assert angle["volume_mm3"] - frame["volume_mm3"] == pytest.approx((25 + 22) * 3 * 300)
             assert "too thick" in await c.fails("structural_member", shape="round_tube", size=[16, 9])
+            assert "half its height" in await c.fails("structural_member", shape="channel", size=[10, 20, 6])
             await c.call("set_material", name="6061-T6 (SS)")
             assert (await c.call("mass_properties"))["mass_kg"] == pytest.approx(angle["volume_mm3"] * 2.7e-6, rel=0.001)
         finally:

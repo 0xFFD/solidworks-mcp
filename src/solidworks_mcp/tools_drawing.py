@@ -27,14 +27,17 @@ _DATUM_TARGET_RE = re.compile(r"^[A-Z]{1,2}\d{1,2}$", re.I)
 _DATUM_RE = re.compile(r"^\s*([A-Z]{1,2}(?:-[A-Z]{1,2})?)\s*(?:[(|]\s*(M|L|S)\s*\)?)?\s*$", re.I)
 
 
-def _place(ann: Any, face: Any, offset: float = 0.02) -> None:
-    """Move a model annotation off the face along its normal so it does not sit inside the part."""
+def _place(ann: Any, face: Any, offset: float = 0.02, xf: Any = None) -> None:
+    """Move a model annotation off the face along its normal so it does not sit inside the part. Component
+    faces are in the component's coordinates, so `xf` (its placement) maps them into the assembly."""
     try:
         box = face.GetBox
         box = box() if callable(box) else box
         c = [(box[i] + box[i + 3]) / 2 for i in range(3)]
         p = list(face.GetClosestPointOn(*c))[:3]
         n = list(face.Normal) if SW.cast(face.GetSurface(), "ISurface").IsPlane() else [0.0, 0.0, 0.0]
+        if xf is not None:
+            p, n = xf.point(p), xf.direction(n)
         ann.SetPosition2(p[0] + n[0] * offset, p[1] + n[1] * offset, p[2] + n[2] * offset)
     except Exception:
         pass
@@ -59,7 +62,7 @@ def add_datum(
         raise SwError("SolidWorks could not insert the datum symbol.")
     dt = SW.cast(dt, "IDatumTag")
     dt.SetLabel(label.upper())
-    _place(SW.cast(dt.GetAnnotation(), "IAnnotation"), ref.obj)
+    _place(SW.cast(dt.GetAnnotation(), "IAnnotation"), ref.obj, xf=g.placement(doc, g.component_of(face)))
     return {"datum": label.upper(), "face": face}
 
 
@@ -86,8 +89,10 @@ def add_datum_target(
     if ref.kind != "face":
         raise SwError(f"{face} is not a face.")
     p = [mm(c) for c in at]
-    q = ref.obj.GetClosestPointOn(*p)
-    if q is None or sum((a - b) ** 2 for a, b in zip(p, list(q)[:3])) > 1e-10:
+    xf = g.placement(doc, g.component_of(face))
+    local = xf.local(p) if xf else p
+    q = ref.obj.GetClosestPointOn(*local)
+    if q is None or sum((a - b) ** 2 for a, b in zip(local, list(q)[:3])) > 1e-10:
         raise SwError(f"{at} is not on {face}.")
     m = _DATUM_TARGET_RE.match(label.strip())
     if not m:
@@ -106,7 +111,7 @@ def add_datum_target(
     doc.ClearSelection2(True)
     if dt is None:
         raise SwError("SolidWorks could not insert the datum target.")
-    _place(SW.cast(SW.cast(dt, "IDatumTargetSym").GetAnnotation(), "IAnnotation"), ref.obj, 0.025)
+    _place(SW.cast(SW.cast(dt, "IDatumTargetSym").GetAnnotation(), "IAnnotation"), ref.obj, 0.025, xf)
     return {"datum_target": label.upper(), "shape": shape, "size": sz or None, "at": at}
 
 
@@ -149,6 +154,10 @@ def add_geometric_tolerance(
         raise SwError(f"{characteristic} is a form tolerance and takes no datum references.")
     if composite and characteristic not in ("position", "profile_surface", "profile_line"):
         raise SwError("Composite frames apply to position and profile tolerances.")
+    if composite:
+        lower_check = float(composite.get("tolerance", 0))
+        if not 0 < lower_check <= tolerance:
+            raise SwError("The composite lower segment needs a tolerance above 0 and no larger than the upper one.")
     if (applies_to != "face" or between) and characteristic not in ("profile_surface", "profile_line"):
         raise SwError("all_around, all_over and between apply to profile tolerances.")
     if between is not None and len(between) != 2:
@@ -184,9 +193,7 @@ def add_geometric_tolerance(
         gt.SetBetweenTwoPoints(True, str(between[0]).upper(), str(between[1]).upper())
         out["between"] = [str(b).upper() for b in between]
     if composite:
-        lower_tol = float(composite.get("tolerance", 0))
-        if not 0 < lower_tol <= tolerance:
-            raise SwError("The composite lower segment needs a tolerance above 0 and no larger than the upper one.")
+        lower_tol = float(composite["tolerance"])
         lower_mc = str(composite.get("material_condition", material_condition)).lower()
         lower_datums = list(composite.get("datums") or [])
         lds = [_datum(d) for d in lower_datums[:3]] + [""] * (3 - len(lower_datums[:3]))
@@ -194,7 +201,7 @@ def add_geometric_tolerance(
         gt.SetFrameValues2(2, f"{lower_tol:g}", "", lds[0], lds[1], lds[2])
         gt.SetCompositeFrame(True)
         out["composite_lower"] = text(lower_tol, diameter_zone, lower_mc, lower_datums)
-    _place(SW.cast(gt.GetAnnotation(), "IAnnotation"), ref.obj, 0.03)
+    _place(SW.cast(gt.GetAnnotation(), "IAnnotation"), ref.obj, 0.03, g.placement(doc, g.component_of(face)))
     return out
 
 
@@ -660,7 +667,7 @@ def add_view(
         v.ReferencedConfiguration = configuration
     if sc := _scale(scale):
         v.UseSheetScale = False
-        v.ScaleRatio = list(sc)
+        v.ScaleDecimal = sc[0] / sc[1]
     doc.ForceRebuild3(True)
     return _view_result(v)
 
@@ -725,7 +732,7 @@ def detail_view(
     sm = doc.SketchManager
     sm.AddToDB = True
     try:
-        circ = sm.CreateCircleByRadius(sx, sy, 0, mm(radius) * parent.ScaleDecimal)
+        circ = sm.CreateCircleByRadius(sx, sy, 0, mm(radius))  # view-sketch space is model-sized
     finally:
         sm.AddToDB = False
     if circ is None:

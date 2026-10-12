@@ -291,6 +291,12 @@ def _nearest(items: list[Any], p: tuple[float, float, float]) -> tuple[int, floa
     return best, best_d
 
 
+def component_of(ref: str) -> str | None:
+    """Component name in a 'face:Comp-1/3' or 'face@Comp-1/x,y,z' reference, else None."""
+    m = _IDX_RE.match(ref.strip()) or _AT_RE.match(ref.strip())
+    return m.group("comp") if m else None
+
+
 def resolve(doc: Any, ref: str) -> Ref:
     ref = ref.strip()
     if m := _IDX_RE.match(ref):

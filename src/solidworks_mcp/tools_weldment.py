@@ -49,13 +49,15 @@ def _profile_entities(shape: str, d: list[float]) -> list[dict]:
         return [{"type": "center_rectangle", "center": [0, 0], "size": [d[0], d[1]]}]
     if shape == "angle":
         a, b, t = d
+        if t >= min(a, b):
+            raise SwError("The angle's thickness must be less than both legs.")
         pts = [[0, 0], [a, 0], [a, t], [t, t], [t, b], [0, b]]
     else:  # channel, opening towards +x
         h, b, t = d
+        if 2 * t >= h or t >= b:
+            raise SwError("The channel's thickness must be less than its flange and half its height.")
         pts = [[0, 0], [b, 0], [b, t], [t, t], [t, h - t], [b, h - t], [b, h], [0, h]]
         pts = [[x, y - h / 2] for x, y in pts]
-    if t >= min(d[:2]):
-        raise SwError("The section is thinner than its thickness.")
     return [{"type": "polyline", "closed": True, "points": pts}]
 
 

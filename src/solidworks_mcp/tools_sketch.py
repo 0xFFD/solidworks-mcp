@@ -679,7 +679,7 @@ def _dimension(doc: Any, sk: Any, op: dict, items: list[str], to_model) -> dict:
     angular = d.GetType() == C.swDimensionParamTypeDoubleAngular
     if op.get("value") is not None:
         v = float(op["value"])
-        r = d.SetSystemValue3(math.radians(v) if angular else mm(v), C.swSetValue_InThisConfiguration, None)
+        r = d.SetSystemValue3(math.radians(v) if angular else mm(v), C.swSetValue_InAllConfigurations, None)
         if r not in (0, None):
             raise SwError(f"SolidWorks rejected {name} = {v}: it would over-define the sketch or is a driven dimension.")
     val = d.GetSystemValue3(C.swThisConfiguration, None)
