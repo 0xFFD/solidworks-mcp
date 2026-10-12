@@ -14,7 +14,8 @@ from .registry import READ_ONLY, WRITES, app, tool
 from .tools_doc import NATIVE, load_failure
 
 MATES = {"coincident": "swMateCOINCIDENT", "concentric": "swMateCONCENTRIC", "perpendicular": "swMatePERPENDICULAR",
-         "parallel": "swMatePARALLEL", "tangent": "swMateTANGENT", "distance": "swMateDISTANCE", "angle": "swMateANGLE", "lock": "swMateLOCK"}
+         "parallel": "swMatePARALLEL", "tangent": "swMateTANGENT", "distance": "swMateDISTANCE", "angle": "swMateANGLE", "lock": "swMateLOCK",
+         "cam": "swMateCAMFOLLOWER"}
 ALIGN = {"aligned": "swMateAlignALIGNED", "anti_aligned": "swMateAlignANTI_ALIGNED", "closest": "swMateAlignCLOSEST"}
 
 
@@ -176,17 +177,29 @@ def _advanced_mate(doc, asm, type: str, refs: list[str], distance: float, angle:
             SW.cast(dim, "IDimension").SetSystemValue3(mm(distance), C.swSetValue_InAllConfigurations, None)
 
 
+def _check_cam(doc, ref: str) -> None:
+    """A cam mate on a single closed face (a plain or eccentric cylinder) crashes SolidWorks, so refuse it."""
+    face = g.resolve(doc, ref).obj
+    if not hasattr(face, "GetEdges"):
+        raise SwError("The cam (refs[0]) must be a face of the cam profile.")
+    edges = SW.cast_all(face.GetEdges(), "IEdge")
+    if edges and all(SW.cast(e.GetCurve(), "ICurve").IsCircle() and e.GetStartVertex() is None for e in edges):
+        raise SwError("A cam needs a profile of several tangent faces (lines and arcs); for a round or eccentric disc use a tangent mate.")
+
+
 @tool(WRITES)
 def add_mate(
     type: Annotated[Literal["coincident", "concentric", "perpendicular", "parallel", "tangent", "distance", "angle", "lock",
                             "limit_distance", "limit_angle", "width", "symmetric", "gear", "slot", "hinge", "rack_pinion", "screw",
-                            "universal_joint"], Field(description=(
+                            "universal_joint", "cam"], Field(description=(
         "Mate type. limit_distance / limit_angle allow travel between minimum and maximum (control surface stops, slides); "
         "width centres a tab between two faces; symmetric places two entities symmetric about plane; gear couples rotation "
         "of two cylindrical faces or circular edges by ratio; slot keeps a pin (cylinder or axis) in a slot face; hinge is a "
         "concentric pivot (refs) plus coincident faces (faces) in one mate; rack_pinion couples a linear edge (refs[0]) "
         "to a rotating cylinder (refs[1]) with distance = pitch diameter; screw couples rotation and travel of two "
-        "cylindrical faces with distance = lead per revolution (jackscrews, actuators); universal_joint couples two shafts."))],
+        "cylindrical faces with distance = lead per revolution (jackscrews, actuators); universal_joint couples two shafts; "
+        "cam keeps a follower (refs[1]: a face, edge or vertex) on a cam (refs[0]: any face of the cam's closed chain of "
+        "tangent faces, such as an extruded lobe of lines and arcs)."))],
     refs: Annotated[list[str], Field(description="Two references on different components: 'face:Comp-1/N', 'edge:Comp-1/N', 'face@Comp-1/x,y,z', plane names, or 'comp:Name' for lock. Width: the two width faces.")],
     distance: Annotated[float, Field(description="Distance in mm (distance mates; nominal position for limit_distance).")] = 0.0,
     angle: Annotated[float, Field(description="Angle in degrees (angle mates; nominal position for limit_angle).")] = 0.0,
@@ -211,6 +224,8 @@ def add_mate(
         _advanced_mate(doc, asm, type, refs, distance, angle, alignment, flip, minimum, maximum, plane, tab, ratio, faces, slot_position, percent)
         doc.EditRebuild3()
         return {"mate": _last_mate(doc), "type": type}
+    if type == "cam":
+        _check_cam(doc, refs[0])
     doc.ClearSelection2(True)
     for r in refs:
         g.select(doc, r, mark=1)

@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Cam mates: `add_mate(type="cam")` keeps a follower face, edge or vertex on a cam's closed chain of tangent
+  faces (picking any one face of the lobe). A plain or eccentric cylinder is refused, because SolidWorks crashes
+  on it; use a tangent mate there.
 - Weldment `end_cap` (caps every open tube end, or chosen ones, with inset, inward placement and corner
   chamfers) and `gusset` (triangular or polygonal corner plates, placed at either end or the middle of the corner).
 - Sketch editing: `list_sketch` lists the segments and points of a sketch, and `modify_sketch` trims, offsets,

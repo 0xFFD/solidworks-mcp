@@ -582,6 +582,15 @@ def test_advanced_mates_and_explode(tmp_path: Path):
             await c.call("insert_component", path="gear20.sldprt", position=[0, 120, 0])
             rack = await c.call("add_mate", type="rack_pinion", refs=["edge@rail-1/0,10,10", "face@gear20-2/10,120,2.5"], distance=20)
             assert rack["mate"].startswith("RackPinion")
+            # a cam lobe (two arcs and two flats) standing upright: picking one flat, the follower rides over the top arc
+            await part("lobe.sldprt", [{"type": "slot", "start": [0, -10], "end": [0, 10], "width": 40}], "plane:Front", 10)
+            await part("follower.sldprt", [{"type": "rectangle", "corner1": [-10, 0], "corner2": [10, 20]}], "plane:Front", 10)
+            await c.call("insert_component", path="lobe.sldprt", position=[0, 400, 0], fix=True)
+            await c.call("insert_component", path="follower.sldprt", position=[0, 460, 0])
+            assert (await c.call("add_mate", type="cam", refs=["face@lobe-1/20,400,5", "face@follower-1/0,460,5"]))["mate"]
+            comps = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
+            assert comps["follower-1"][1] == pytest.approx(430)  # 10 mm flat half-length + 20 mm arc radius above the centre
+            assert "tangent mate" in await c.fails("add_mate", type="cam", refs=["face@gear20-2/10,120,2.5", "face@follower-1/0,430,5"])
             # GD&T on assembly components, including one that is not at the origin
             assert (await c.call("add_datum_target", face="face@slotplate-1/-30,-25,10", at=[-30, -25, 10], label="C1"))["datum_target"] == "C1"
             await c.call("add_datum", face="face@rail-1/0,0,0", label="A")
