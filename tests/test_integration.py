@@ -1237,6 +1237,48 @@ def test_setback_fillet(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_knit_and_thicken(tmp_path: Path):
+    """Two skin panels knitted and thickened, and a closed set of surfaces knitted into a solid."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            for c1, c2 in (([0, 0], [40, 50]), ([40, 0], [80, 50])):
+                await c.call("start_sketch", on="plane:Top")
+                await c.call("sketch", entities=[{"type": "rectangle", "corner1": c1, "corner2": c2}])
+                await c.call("finish_sketch")
+                await c.call("surface", kind="planar")
+            k = await c.call("knit_surfaces")
+            assert k["surface_bodies"] == 1
+            skin = (await c.call("list_bodies"))["surfaces"][0]["name"]
+            t = await c.call("thicken", body=f"body:{skin}", thickness=1.5, side="normal")
+            assert t["volume_mm3"] == pytest.approx(80 * 50 * 1.5)
+        finally:
+            await c.call("close_document")
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [0, 0], "corner2": [40, 30]}])
+            await c.call("finish_sketch")
+            await c.call("surface", kind="extrude", sketch="Sketch1", depth=20)
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [0, 0], "corner2": [40, 30]}])
+            await c.call("finish_sketch")
+            await c.call("surface", kind="planar")
+            assert "did not close" in await c.fails("knit_surfaces", form_solid=True)  # the top is still open
+            plane = (await c.call("ref_plane", mode="offset", refs=["plane:Top"], distance=20))["feature"]
+            await c.call("start_sketch", on=plane)
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [0, 0], "corner2": [40, 30]}])
+            await c.call("finish_sketch")
+            await c.call("surface", kind="planar")
+            box = await c.call("knit_surfaces", form_solid=True)
+            assert box["solid_bodies"] == 1 and box["volume_mm3"] == pytest.approx(40 * 30 * 20)
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

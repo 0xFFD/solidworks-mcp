@@ -1358,3 +1358,62 @@ def ref_axis(
         g.select(doc, r)
     doc.InsertAxis2(True)
     return created_since(doc, before, "reference axis")
+
+
+def _select_bodies(doc: Any, refs: list[str] | None, mark: int) -> list[Any]:
+    """Select bodies (all surface bodies when refs is None) with the given mark; SolidWorks' knit and thicken
+    only see bodies selected with mark 1."""
+    objs = [g.resolve(doc, r if r.startswith("body:") else f"body:{r}").obj for r in refs] if refs else g.surface_bodies(doc)
+    if not objs:
+        raise SwError("There are no surface bodies; make them with surface().")
+    doc.ClearSelection2(True)
+    sm = SW.cast(doc.SelectionManager, "ISelectionMgr")
+    for b in objs:
+        data = SW.cast(sm.CreateSelectData(), "ISelectData")
+        data.Mark = mark
+        if not SW.cast(b, "IBody2").Select2(True, data):
+            raise SwError(f"Could not select {SW.cast(b, 'IBody2').Name}.")
+    return objs
+
+
+@tool(WRITES)
+def knit_surfaces(
+    bodies: Annotated[list[str] | None, Field(description="Surface bodies to knit ('body:Name' from list_bodies); default all of them.")] = None,
+    form_solid: Annotated[bool, Field(description="Make a solid when the surfaces close a volume (a skin around a bay, a fairing).")] = False,
+    tolerance: Annotated[float, Field(gt=0, description="Knit tolerance, mm: edges closer than this are joined.")] = 0.0025,
+) -> dict:
+    """Knit surface bodies along their shared edges into one surface, or into a solid when they enclose a volume."""
+    doc = SW.active("part")
+    before_s, before_solid = len(g.surface_bodies(doc)), len(g.bodies(doc))
+    picked = _select_bodies(doc, bodies, 1)
+    if len(picked) < 2 and not form_solid:
+        raise SwError("Knit needs two or more surface bodies.")
+    # forming a solid only happens with the gap filters on
+    f = doc.FeatureManager.InsertSewRefSurface(form_solid, form_solid, True, mm(tolerance), mm(tolerance))
+    out = result(doc, f, "surface knit", "The surfaces must meet along shared edges (within the tolerance).")
+    after_s, after_solid = len(g.surface_bodies(doc)), len(g.bodies(doc))
+    if form_solid and after_solid <= before_solid:
+        raise SwError("The knit did not close into a solid; check for gaps or a missing face (list_bodies).")
+    if not form_solid and after_s >= before_s:
+        raise SwError("The surfaces were not joined; they must share edges within the tolerance.")
+    out.update(surface_bodies=after_s, solid_bodies=after_solid)
+    return out
+
+
+@tool(WRITES)
+def thicken(
+    body: Annotated[str, Field(description="Surface body to thicken ('body:Name' from list_bodies).")],
+    thickness: Annotated[float, Field(gt=0, description="Thickness in mm (each side when side='both').")],
+    side: Annotated[Literal["normal", "reverse", "both"], Field(description="Grow along the surface normal, against it, or both ways.")] = "normal",
+    merge: Annotated[bool, Field(description="Merge with solids it touches.")] = True,
+) -> dict:
+    """Thicken a surface into a solid: skins, fairings and panels modelled as surfaces, made solid for mass
+    properties, drawings and manufacture."""
+    doc = SW.active("part")
+    before = _volume(doc) or 0.0
+    _select_bodies(doc, [body], 1)
+    f = doc.FeatureManager.FeatureBossThicken(mm(thickness), {"normal": 0, "reverse": 1, "both": 2}[side], 0, False, merge, True, True)
+    out = result(doc, f, "thicken", "The surface may curve too tightly for that thickness.")
+    if (out.get("volume_mm3") or 0.0) <= before:
+        raise SwError("The thicken added no material.")
+    return out

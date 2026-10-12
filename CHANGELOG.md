@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `knit_surfaces` joins surface bodies, into a solid when they enclose a volume, and `thicken` turns a surface
+  into a solid skin (both need the bodies selected with mark 1, and knitting a solid needs the gap filters on).
 - Setback fillets: `fillet(setback=[{vertex, distance}])` blends corners where three or more filleted edges meet
   (SolidWorks only takes setbacks with tangent propagation off); a refused setback leaves no fillet behind.
 - `sheet_metal_base(k_factor=...)` sets the part's K-factor (through the template sheet metal feature, the only
