@@ -195,6 +195,8 @@ def test_tools_registered_with_annotations():
                  "configurations", "combine", "move_body", "sheet_metal_base", "edge_flange", "flat_pattern",
                  "detail_view", "projected_view", "auxiliary_view", "add_view", "sheets", "drawing_dimension", "drawing_table", "exploded_view", "add_datum_target", "hem", "sketched_bend", "split_body", "surface", "broken_view", "breakout_section", "driven_pattern", "convert_to_sheet_metal", "view_dimensions", "structural_member", "closed_corner"):
         assert tools[name].annotations.read_only_hint is False, name
+    for name in ("cut_list",):
+        assert tools[name].annotations.read_only_hint is True, name
     assert "millimetres" in server.INSTRUCTIONS
 
 

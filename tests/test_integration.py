@@ -775,6 +775,8 @@ def test_weldment_frame(tmp_path: Path):
             frame = await c.call("structural_member", shape="square_tube", size=[20, 2], corner="butt")
             # tube section 400 - 256 = 144 mm2; 1000 mm of frame plus the upright, trimmed by half a tube at the joint
             assert frame["members"] == 5 and frame["volume_mm3"] == pytest.approx(144 * (1000 + 240), rel=0.001)
+            cuts = {(i["quantity"], i["length_mm"]) for i in (await c.call("cut_list"))["items"]}
+            assert cuts == {(2, 300.0), (2, 200.0), (1, 240.0)}  # butted members: long sides full length, upright trimmed
             await c.call("start_sketch", on="plane:Top")
             await c.call("sketch", entities=[{"type": "line", "from": [0, -300], "to": [300, -300]}])
             await c.call("finish_sketch")

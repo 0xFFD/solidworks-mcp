@@ -15,7 +15,7 @@ from . import geometry as g
 from . import shapes
 from .com import SW
 from .errors import SwError
-from .registry import WRITES, app, tool
+from .registry import READ_ONLY, WRITES, app, tool
 from .tools_doc import TEMPLATE_PREFS
 from .tools_features import _dispatch_array, result
 from .tools_sketch import _add, last_sketch
@@ -177,4 +177,49 @@ def structural_member(
     out = result(doc, feat, "structural member", "The sketch lines must not overlap and the profile must be a closed sketch.")
     out["members"] = len(g.bodies(doc)) - before
     out["profile"] = str(path)
+    out["cut_list"] = _cut_list(doc)
     return out
+
+
+def _number(text: str) -> float | None:
+    import re
+
+    m = re.search(r"-?\d+(?:\.\d+)?", text or "")
+    return float(m.group(0)) if m else None
+
+
+def _cut_list(doc: Any) -> list[dict]:
+    """Weldment cut list items: quantity, length and end-cut angles, as SolidWorks computes them."""
+    doc.ForceRebuild3(False)
+    for f in g.iter_features(doc):
+        if f.GetTypeName2() == "SolidBodyFolder":
+            SW.cast(f.GetSpecificFeature2(), "IBodyFolder").UpdateCutList()
+    items = []
+    for f in g.iter_features(doc):
+        sub = SW.cast(f.GetFirstSubFeature(), "IFeature")
+        while sub is not None:
+            if sub.GetTypeName2() == "CutListFolder":
+                cpm = SW.cast(sub.CustomPropertyManager, "ICustomPropertyManager")
+                props = {n.upper(): cpm.Get6(n, False)[2] for n in (cpm.GetNames() or [])}
+                body_count = SW.cast(sub.GetSpecificFeature2(), "IBodyFolder").GetBodyCount()
+                row: dict[str, Any] = {"item": sub.Name, "quantity": int(_number(props.get("QUANTITY", "")) or body_count)}
+                for key, name in (("LENGTH", "length_mm"), ("ANGLE1", "angle1_deg"), ("ANGLE2", "angle2_deg")):
+                    if (v := _number(props.get(key, ""))) is not None:
+                        row[name] = v
+                if props.get("DESCRIPTION"):
+                    row["description"] = props["DESCRIPTION"]
+                items.append(row)
+            sub = SW.cast(sub.GetNextSubFeature(), "IFeature")
+    return items
+
+
+@tool(READ_ONLY)
+def cut_list() -> dict:
+    """Weldment cut list of the active part: one row per group of identical members with quantity, cut
+    length and end-cut angles, for the fabrication BOM and saw schedule."""
+    doc = SW.active("part")
+    items = _cut_list(doc)
+    if not items:
+        raise SwError("The part has no weldment cut list; add members with structural_member.")
+    return {"items": items, "members": sum(i["quantity"] for i in items),
+            "total_length_mm": round(sum(i.get("length_mm", 0) * i["quantity"] for i in items), 3)}
