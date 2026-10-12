@@ -177,7 +177,7 @@ def _advanced_mate(doc, asm, type: str, refs: list[str], distance: float, angle:
             SW.cast(dim, "IDimension").SetSystemValue3(mm(distance), C.swSetValue_InAllConfigurations, None)
 
 
-def _path_mate(doc, asm, refs: list[str]) -> dict:
+def _path_mate(doc, asm, refs: list[str], orientation: str = "free") -> dict:
     """A path mate as a point-on-curve coincidence: SolidWorks' own path mate has no API (no path mate data in the
     type library, and AddMate5 makes nothing), but a vertex coincident with a curve follows it the same way."""
     import re
@@ -217,8 +217,39 @@ def _path_mate(doc, asm, refs: list[str]) -> dict:
     if mate is None:
         raise SwError(f"SolidWorks could not put the vertex on the path ({const_name('swAddMateError_', err)}).")
     doc.EditRebuild3()
+    out: dict[str, Any] = {"mate": _last_mate(doc), "type": "path"}
+    if orientation == "fixed":
+        # lock pitch, yaw and roll: two planar faces of the component parallel to the assembly planes they face now
+        planes = {0: "plane:Right", 1: "plane:Top", 2: "plane:Front"}
+        locked, used = [], set()
+        place = g.Placement(comp)
+        for b in SW.cast_all(comp.GetBodies2(0), "IBody2"):
+            for f in SW.cast_all(b.GetFaces(), "IFace2"):
+                if len(locked) == 2 or not SW.cast(f.GetSurface(), "ISurface").IsPlane():
+                    continue
+                n = place.direction(f.Normal)
+                axis = max(range(3), key=lambda i: abs(n[i]))
+                if abs(abs(n[axis]) - 1) > 1e-6 or axis in used:
+                    continue
+                box = f.GetBox
+                box = box() if callable(box) else box
+                pt = place.point(list(f.GetClosestPointOn(*[(box[i] + box[i + 3]) / 2 for i in range(3)]))[:3])
+                doc.ClearSelection2(True)
+                g.Ref(f, "face", "face").select(doc, mark=1)
+                g.select(doc, planes[axis], mark=1)
+                res = asm.AddMate5(C.swMatePARALLEL, C.swMateAlignCLOSEST, False, 0, 0, 0, 0.001, 0.001, 0, 0, 0, False, False, 0, 0)
+                doc.ClearSelection2(True)
+                if (res[0] if isinstance(res, tuple) else res) is None:
+                    raise SwError(f"Could not lock the orientation of {m.group(1)} (a face at {[round(to_mm(c), 2) for c in pt]}).")
+                used.add(axis)
+                locked.append(_last_mate(doc))
+        if len(locked) < 2:
+            raise SwError(f"{m.group(1)} needs two flat faces square to the assembly axes to lock its orientation.")
+        doc.EditRebuild3()
+        out["orientation_mates"] = locked
     at = g.Placement(comp).point(vtx.GetPoint())  # the component has moved onto the path
-    return {"mate": _last_mate(doc), "type": "path", "vertex_at_mm": [round(to_mm(c), 4) for c in at]}
+    out["vertex_at_mm"] = [round(to_mm(c), 4) for c in at]
+    return out
 
 
 def _check_cam(doc, ref: str) -> None:
@@ -259,6 +290,9 @@ def add_mate(
     faces: Annotated[list[str] | None, Field(description="hinge: the two planar faces that stay in contact.")] = None,
     slot_position: Annotated[Literal["free", "center", "distance", "percent"], Field(description="slot: free along the slot, centred, at distance (mm from the slot end) or at percent.")] = "free",
     percent: Annotated[float | None, Field(description="slot: position along the slot in percent (slot_position='percent').")] = None,
+    path_orientation: Annotated[Literal["free", "fixed"], Field(description=(
+        "path: free lets the component turn as it moves; fixed keeps its orientation (pitch, yaw and roll locked) with "
+        "parallel mates to the assembly planes, as for a carriage that translates along a track."))] = "free",
 ) -> dict:
     """Mate two entities of different components, including limit, width, symmetric and gear mates."""
     if len(refs) != 2:
@@ -271,7 +305,7 @@ def add_mate(
         doc.EditRebuild3()
         return {"mate": _last_mate(doc), "type": type}
     if type == "path":
-        return _path_mate(doc, asm, refs)
+        return _path_mate(doc, asm, refs, path_orientation)
     if type == "cam":
         _check_cam(doc, refs[0])
     doc.ClearSelection2(True)

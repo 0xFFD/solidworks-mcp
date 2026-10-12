@@ -652,7 +652,8 @@ def test_advanced_mates_and_explode(tmp_path: Path):
             await c.call("start_sketch", on="plane:Front")
             await c.call("sketch", entities=[{"type": "arc", "center": [0, 600], "start": [50, 600], "end": [-50, 600]}])
             track = (await c.call("finish_sketch"))["sketch"]
-            pm = await c.call("add_mate", type="path", refs=["vertex@slider-3/30,660,20", f"sketch:{track}"])
+            pm = await c.call("add_mate", type="path", refs=["vertex@slider-3/30,660,20", f"sketch:{track}"], path_orientation="fixed")
+            assert len(pm["orientation_mates"]) == 2  # pitch, yaw and roll held by two parallel mates
             x, y, z = pm["vertex_at_mm"]
             assert math.hypot(x, y - 600) == pytest.approx(50, abs=1e-3) and z == pytest.approx(0, abs=1e-3)
             # GD&T on assembly components, including one that is not at the origin
