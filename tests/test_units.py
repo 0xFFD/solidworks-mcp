@@ -275,3 +275,39 @@ def test_screenshot_crop_centres_model():
     px = out.load()
     assert px[100, 70] == (200, 200, 200)  # the model is now centred
     assert px[2, 2] != (200, 200, 200)
+
+
+def _xlsx(path: Path, rows: list[list[str]]) -> None:
+    import zipfile
+
+    cells = "".join(
+        f'<row r="{i + 1}">' + "".join(f'<c r="{chr(65 + j)}{i + 1}" t="inlineStr"><is><t>{v}</t></is></c>' for j, v in enumerate(r) if v) + "</row>"
+        for i, r in enumerate(rows))
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("xl/worksheets/sheet1.xml", '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                   f"<sheetData>{cells}</sheetData></worksheet>")
+
+
+def test_gauge_table_without_excel(tmp_path: Path):
+    from solidworks_mcp import gauge
+
+    f = tmp_path / "g.xlsx"
+    _xlsx(f, [["Type:", "Steel"], ["K-Factor", "0.42"], ["Unit:", "inches"], [], ["Gauge No.", "Gauge(Thickness)", "Available Bend Radius"],
+              ["16 Gauge", "0.0598", ".0625; .125"], ["14 Gauge ", "0.0747", ".125"]])
+    t = gauge.parse_gauge_table(gauge.read_xlsx(f))
+    assert t["k_factor"] == 0.42 and len(t["gauges"]) == 2
+    g = gauge.find_gauge(t, "14")
+    assert g["gauge"] == "14 Gauge" and g["thickness_mm"] == pytest.approx(0.0747 * 25.4, abs=1e-4) and g["bend_radii_mm"] == [3.175]
+    with pytest.raises(SwError):
+        gauge.find_gauge(t, "10")
+
+
+def test_solidworks_sample_gauge_table():
+    from solidworks_mcp import gauge
+
+    f = Path(r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\lang\english\Sheet Metal Gauge Tables\sample table - aluminum - metric units.xlsx")
+    if not f.exists():
+        pytest.skip("SolidWorks gauge tables not installed")
+    t = gauge.parse_gauge_table(gauge.read_xlsx(f))
+    g = gauge.find_gauge(t, "Gauge 14")
+    assert g["thickness_mm"] == 2.0 and 2.0 in g["bend_radii_mm"] and t["k_factor"] == 0.5

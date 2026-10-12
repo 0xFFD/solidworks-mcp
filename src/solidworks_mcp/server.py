@@ -50,7 +50,7 @@ Typical part workflow:
    feature_action, undo.
 6. Engineering data: set_material / list_materials, custom_properties (part number, revision,
    export-control marking), equations, configurations (variants: set_dimensions and feature_action take
-   configurations=[...]), document_settings (units, ASME or ISO drafting standard),
+   configurations=[...]; configuration_table builds a dash-number family from rows), document_settings (units, ASME or ISO drafting standard),
    add_datum, add_datum_target, add_geometric_tolerance (composite frames, projected zones) and
    add_surface_finish (GD&T on part or assembly component faces, carried into drawings); annotation_views groups them by viewing direction; dimxpert applies a
    complete automatic MBD scheme from chosen datum faces.

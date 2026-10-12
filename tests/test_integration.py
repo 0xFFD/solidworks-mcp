@@ -1140,6 +1140,50 @@ def test_loft_and_sweep_editing(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_gauges_and_configuration_table(tmp_path: Path):
+    """A gauge-table blank, and a dash-numbered plate family built from a configuration table."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            table = await c.call("gauge_table", table="aluminum metric")
+            assert any(g["gauge"] == "Gauge 14" and g["thickness_mm"] == 2.0 for g in table["gauges"])
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-50, -30], "corner2": [50, 30]}])
+            await c.call("finish_sketch")
+            base = await c.call("sheet_metal_base", gauge="14", gauge_table="aluminum metric")
+            assert base["thickness"] == 2.0 and base["bend_radius"] == 2.0 and base["volume_mm3"] == pytest.approx(100 * 60 * 2)
+        finally:
+            await c.call("close_document")
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [0, 0], "corner2": [60, 30]}])
+            await c.call("finish_sketch", fully_define=True)
+            await c.call("extrude", depth=5)
+            await c.call("start_sketch", on="face@10,5,-10")
+            await c.call("sketch", coords="model", entities=[{"type": "circle", "center": [15, 5, -15], "diameter": 6}])
+            await c.call("finish_sketch")
+            await c.call("extrude", cut=True, end="through_all")
+            dims = (await c.call("dimensions"))["dimensions"]
+            length = next(d["name"] for d in dims["Sketch1"] if d["value"] == 60).split("@Part")[0]
+            thick = dims["Boss-Extrude1"][0]["name"].split("@Part")[0]
+            t = await c.call("configuration_table", export_csv="plates.csv", rows=[
+                {"config": "-001", "dimensions": {length: 60, thick: 5}, "properties": {"PartNo": "PLT-001"}},
+                {"config": "-002", "dimensions": {length: 90, thick: 5}, "suppress": ["Cut-Extrude1"]},
+                {"config": "-003", "dimensions": {length: 120, thick: 8}}])
+            assert {r["config"]: r[length] for r in t["configurations"]} == {"Default": 60, "-001": 60, "-002": 90, "-003": 120}
+            hole = math.pi * 9
+            for cfg, vol in (("-001", 60 * 30 * 5 - hole * 5), ("-002", 90 * 30 * 5), ("-003", 120 * 30 * 8 - hole * 8)):
+                await c.call("configurations", action="activate", name=cfg)
+                assert (await c.call("mass_properties"))["volume_mm3"] == pytest.approx(vol)  # -003 keeps the hole -002 suppressed
+            assert (tmp_path / "plates.csv").read_text().splitlines()[0] == f"config,{length},{thick}"
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

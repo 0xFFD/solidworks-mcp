@@ -576,3 +576,78 @@ def tolerance_stack(
         out["worst_case_ok"] = lo <= r["worst_case"][0] and r["worst_case"][1] <= hi
         out["rss_ok"] = lo <= r["rss"][0] and r["rss"][1] <= hi
     return out
+
+
+@tool(WRITES)
+def configuration_table(
+    rows: Annotated[list[dict[str, Any]] | None, Field(description=(
+        "One row per configuration: {config: '-001', description, dimensions: {'D1@Sketch1': 50}, suppress: ['Cut-Extrude2'], "
+        "unsuppress: [...], properties: {'PartNo': 'BRK-1001-001'}}. Missing configurations are created. Omit rows to read the table."))] = None,
+    columns: Annotated[list[str] | None, Field(description="Dimensions to report for every configuration (default: those named in rows).")] = None,
+    export_csv: Annotated[str | None, Field(description="Also write the table to this .csv file (configuration, then one column per dimension).")] = None,
+) -> dict:
+    """Tabulated configurations, the working part of a design table without Excel: build or update dash-numbered
+    variants from rows of dimension values, suppressed features and properties, then read every configuration's
+    values back. Use it for part families (lengths, hole counts, thicknesses) and tabulated drawings."""
+    import pythoncom
+    from win32com.client import VARIANT
+
+    from .tools_doc import custom_properties
+
+    doc = SW.active()
+    if doc_kind(doc) == "drawing":
+        raise SwError("Configurations belong to parts and assemblies.")
+    C = SW.C
+    existing = set(doc.GetConfigurationNames() or [])
+    # SolidWorks copies the active configuration into a new one; start every new row from the configuration
+    # that was active when the table was applied, not from the previous row's
+    base = SW.cast(doc.ConfigurationManager.ActiveConfiguration, "IConfiguration").Name
+    for i, row in enumerate(rows or []):
+        name = str(row.get("config") or "").strip()
+        if not name:
+            raise SwError(f"rows[{i}] needs config (the configuration name).")
+        if name not in existing:
+            if SW.cast(doc.ConfigurationManager.ActiveConfiguration, "IConfiguration").Name != base:
+                configurations(action="activate", name=base)
+            configurations(action="add", name=name, description=row.get("description"))
+            existing.add(name)
+        if row.get("dimensions"):
+            set_dimensions(values={k: float(v) for k, v in row["dimensions"].items()}, configurations=[name])
+        for key, act in (("suppress", "suppress"), ("unsuppress", "unsuppress")):
+            if row.get(key):
+                feature_action(features=list(row[key]), action=act, configurations=[name])
+        if row.get("properties"):
+            custom_properties(set={k: str(v) for k, v in row["properties"].items()}, configuration=name)
+    cols = list(columns or dict.fromkeys(k for row in rows or [] for k in (row.get("dimensions") or {})))
+    names = list(doc.GetConfigurationNames() or [])
+    table = []
+    for cfg in names:
+        line: dict[str, Any] = {"config": cfg}
+        for col in cols:
+            d = doc.Parameter(col)
+            if d is None:
+                raise SwError(f"No dimension named '{col}'.")
+            d = SW.cast(d, "IDimension")
+            # the configuration names must go as a BSTR array; a plain list quietly returns nothing
+            v = list(d.GetSystemValue3(C.swSpecifyConfiguration, VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_BSTR, [cfg])) or [None])[0]
+            kind = d.GetType()
+            line[col] = None if v is None else round(to_deg(v) if kind == C.swDimensionParamTypeDoubleAngular else (to_mm(v) if kind == C.swDimensionParamTypeDoubleLinear else v), 6)
+        table.append(line)
+    mismatch = []
+    for row in rows or []:
+        got = next(t for t in table if t["config"] == str(row["config"]).strip())
+        mismatch += [f"{got['config']} {k}: {got[k]} instead of {v}" for k, v in (row.get("dimensions") or {}).items() if got.get(k) is None or abs(got[k] - float(v)) > 1e-6]
+    if mismatch:
+        raise SwError("The configurations did not take these values: " + "; ".join(mismatch))
+    out: dict[str, Any] = {"configurations": table}
+    if export_csv:
+        import csv
+
+        p = app().path(export_csv, suffixes=(".csv",))
+        with p.open("w", newline="", encoding="utf-8") as fh:
+            w = csv.writer(fh)
+            w.writerow(["config", *cols])
+            for t in table:
+                w.writerow([t["config"], *[t[c] for c in cols]])
+        out["exported"] = str(p)
+    return out

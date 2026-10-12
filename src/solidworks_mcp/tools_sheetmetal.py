@@ -8,10 +8,11 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from . import gauge as gauge_mod
 from . import geometry as g
 from .com import SW, mm, rad, to_mm
 from .errors import SwError
-from .registry import WRITES, app, tool
+from .registry import READ_ONLY, WRITES, app, tool
 from .tools_doc import checked_marking
 from .tools_features import _dispatch_array, _last_feature, _select_sketch, feature_error, result
 from .tools_sketch import SketchFrame, sketch_name
@@ -52,12 +53,14 @@ def _unit(v: list[float]) -> list[float]:
 
 @tool(WRITES)
 def sheet_metal_base(
-    thickness: Annotated[float, Field(gt=0, description="Sheet thickness in mm (e.g. 1.0, 1.6, 2.0 for aluminium 2024/5052/6061 sheet).")],
-    bend_radius: Annotated[float, Field(gt=0, description="Inside bend radius in mm; for aluminium alloys usually 1-3 x thickness depending on temper.")],
+    thickness: Annotated[float | None, Field(gt=0, description="Sheet thickness in mm (e.g. 1.0, 1.6, 2.0 for aluminium 2024/5052/6061 sheet); or give gauge.")] = None,
+    bend_radius: Annotated[float | None, Field(gt=0, description="Inside bend radius in mm; for aluminium alloys usually 1-3 x thickness depending on temper.")] = None,
     sketch: Annotated[str | None, Field(description="Sketch with a closed outline (a flat tab) or an open profile (an L, U, Z or hat section); default is the latest sketch.")] = None,
     depth: Annotated[float | None, Field(description="Open profiles: extrusion depth in mm.")] = None,
     midplane: Annotated[bool, Field(description="Open profiles: extrude half the depth each way.")] = False,
     reverse_thickness: Annotated[bool, Field(description="Add the thickness to the other side of the sketch.")] = False,
+    gauge: Annotated[str | None, Field(description="Take thickness (and the bend radius if not given) from this gauge of gauge_table, e.g. 'Gauge 14' or '14'.")] = None,
+    gauge_table: Annotated[str | None, Field(description="Gauge table: an .xlsx file, or words naming a SolidWorks sample table ('aluminum metric', 'steel').")] = None,
 ) -> dict:
     """Start a sheet metal part with a base flange from a sketch: a closed outline gives a flat blank, an
     open profile gives a formed section with the bends. Add edge_flange to fold up edges and flat_pattern
@@ -65,6 +68,18 @@ def sheet_metal_base(
     (reported here); edge_flange can set its own."""
     doc = SW.active("part")
     C = SW.C
+    gauge_row = table = None
+    if gauge:
+        table = _gauge(gauge_table)
+        gauge_row = gauge_mod.find_gauge(table, gauge)
+        thickness = gauge_row["thickness_mm"]
+        radii = gauge_row["bend_radii_mm"]
+        if bend_radius is None:
+            bend_radius = min(radii) if radii else thickness
+        elif radii and all(abs(bend_radius - r) > 1e-6 for r in radii):
+            raise SwError(f"{gauge_row['gauge']} allows bend radii {radii} mm, not {bend_radius}.")
+    if not thickness or not bend_radius:
+        raise SwError("Give thickness and bend_radius, or a gauge from a gauge_table.")
     name = _select_sketch(doc, sketch)
     fm = doc.FeatureManager
     data = SW.cast(fm.CreateDefinition(C.swFmBaseFlange), "IBaseFlangeFeatureData")
@@ -77,7 +92,35 @@ def sheet_metal_base(
     f = fm.CreateFeature(data)
     out = result(doc, f, "base flange", f"{name} needs one closed outline, or an open profile with depth=.")
     out.update(thickness=thickness, bend_radius=bend_radius, k_factor=round(SW.cast(_sheet_metal_feature(doc).GetDefinition(), "ISheetMetalFeatureData").KFactor, 4))
+    if gauge_row:
+        out["gauge"] = gauge_row["gauge"]
+        if table.get("k_factor") is not None:
+            out["table_k_factor"] = table["k_factor"]
+            out["note"] = f"Pass k_factor={table['k_factor']} to edge_flange to use the table's K-factor for those bends."
     return out
+
+
+def _gauge(table: str | None) -> dict:
+    """A gauge table by file (workspace) or by words naming one of SolidWorks' sample tables."""
+    if table and table.lower().endswith(".xlsx"):
+        return gauge_mod.parse_gauge_table(gauge_mod.read_xlsx(app().path(table, must_exist=True, suffixes=(".xlsx",))))
+    folder = Path(SW.app.GetExecutablePath()) / "lang" / (SW.app.GetCurrentLanguage() or "english") / "Sheet Metal Gauge Tables"
+    files = sorted(folder.glob("sample table*.xlsx")) if folder.is_dir() else []
+    words = (table or "aluminum metric").lower().split()
+    pick = [f for f in files if all(w in f.stem.lower() for w in words)]
+    if not pick:
+        raise SwError(f"No gauge table matching '{table}'. SolidWorks tables: {', '.join(f.stem for f in files) or 'none found'}; "
+                      "or give an .xlsx file in the workspace.")
+    return gauge_mod.parse_gauge_table(gauge_mod.read_xlsx(pick[0])) | {"file": pick[0].name}
+
+
+@tool(READ_ONLY)
+def gauge_table(
+    table: Annotated[str | None, Field(description="An .xlsx gauge table in the workspace, or words naming a SolidWorks sample table ('aluminum metric', 'steel').")] = None,
+) -> dict:
+    """Gauges of a sheet metal gauge table with thickness and allowed bend radii in mm, read without Excel;
+    use a gauge with sheet_metal_base(gauge=...)."""
+    return _gauge(table)
 
 
 def _edge_faces(doc: Any, ref: str) -> tuple[Any, Any, Any]:

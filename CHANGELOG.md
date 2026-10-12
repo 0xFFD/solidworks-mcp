@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Gauge tables without Excel: `gauge_table` reads SolidWorks .xlsx gauge tables directly, and `sheet_metal_base(gauge=...)`
+  takes thickness and an allowed bend radius from them.
+- `configuration_table` builds or updates dash-numbered configurations from rows of dimension values, suppressed
+  features and properties, reads every configuration back and exports the table as CSV (a design table without Excel).
 - `modify_sketch` ops `spline_tangent` (tangent angle and weight at a fit point) and `picture` (a scaled reference
   image for tracing legacy drawings), and `block` takes `save_as` to write a .sldblk file, which `insert_block` places again in any sketch.
 - `annotation_views` lists a model's 3D annotation views and creates new ones facing a standard direction,
