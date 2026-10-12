@@ -1062,6 +1062,47 @@ def test_tolerance_stack(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_loft_and_sweep_editing(tmp_path: Path):
+    """Insert a section into a loft and swap a sweep's profile, through edit_feature."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "line", "from": [0, 0], "to": [0, 100]}])
+            await c.call("finish_sketch")
+            for e in ({"type": "center_rectangle", "center": [0, 0], "size": [10, 10]}, {"type": "circle", "center": [0, 0], "diameter": 12}):
+                await c.call("start_sketch", on="plane:Top")
+                await c.call("sketch", entities=[e])
+                await c.call("finish_sketch")
+            sw = await c.call("sweep", path="Sketch1", profile="Sketch2")
+            assert sw["volume_mm3"] == pytest.approx(100 * 100)
+            r = await c.call("edit_feature", feature=sw["feature"], profiles=["Sketch3"])
+            assert r["volume_mm3"] == pytest.approx(math.pi * 36 * 100)
+            assert "not a sketch" in await c.fails("edit_feature", feature=sw["feature"], profiles=["Sweep1"])
+        finally:
+            await c.call("close_document")
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "center_rectangle", "center": [0, 0], "size": [40, 40]}])
+            await c.call("finish_sketch")
+            for d, dia in ((60, 30), (30, 60)):
+                plane = (await c.call("ref_plane", mode="offset", refs=["plane:Top"], distance=d))["feature"]
+                await c.call("start_sketch", on=plane)
+                await c.call("sketch", entities=[{"type": "circle", "center": [0, 0], "diameter": dia}])
+                await c.call("finish_sketch")
+            lo = await c.call("loft", profiles=["Sketch1", "Sketch2"])
+            fat = await c.call("edit_feature", feature=lo["feature"], profiles=["Sketch1", "Sketch3", "Sketch2"])
+            assert fat["volume_mm3"] > lo["volume_mm3"] * 1.5  # bulges through the 60 mm section
+            box = await c.call("bounding_box")
+            assert box["size"][0] >= 60  # passes through the 60 mm section (a smooth loft bulges a little past it)
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `edit_feature` edits lofts (replace, add or reorder profiles; close) and swaps a sweep's profile or path sketch.
 - `forming_tool` places design-library forming tools (dimples, embosses, flanged holes, louvres, lances, ribs)
   exactly on a sheet metal face, refusing placements that run off the sheet.
 - `tolerance_stack` computes worst-case and RSS limits of a one-dimensional dimension chain (clearances, gaps,

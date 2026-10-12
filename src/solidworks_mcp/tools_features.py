@@ -998,6 +998,7 @@ _DEFINITIONS = {
     "BaseRevolve": "IRevolveFeatureData2", "Fillet": "ISimpleFilletFeatureData2", "Chamfer": "IChamferFeatureData2",
     "Shell": "IShellFeatureData", "LPattern": "ILinearPatternFeatureData", "CirPattern": "ICircularPatternFeatureData",
     "HoleWzd": "IWizardHoleFeatureData2", "Draft": "IDraftFeatureData2", "Sweep": "ISweepFeatureData", "SweepCut": "ISweepFeatureData",
+    "Blend": "ILoftFeatureData", "BlendCut": "ILoftFeatureData",
 }
 _HOLE_STANDARDS = {"ISO": "iso", "ANSI METRIC": "ansi_metric", "ANSI INCH": "ansi_inch"}
 
@@ -1043,6 +1044,13 @@ def _dimension_with_value(f: Any, value: float, skip: list[str]) -> str:
     return found[0]
 
 
+def _sketch_feature(doc: Any, name: str) -> Any:
+    f = g.feature_by_name(doc, name)
+    if f is None or f.GetTypeName2() not in ("ProfileFeature", "3DProfileFeature"):
+        raise SwError(f"'{name}' is not a sketch.")
+    return f
+
+
 @tool(WRITES)
 def edit_feature(
     feature: Annotated[str, Field(description="Feature name from list_features.")],
@@ -1066,6 +1074,9 @@ def edit_feature(
     fastener: Annotated[str | None, Field(description="Hole: table for size= such as clearance, tapped or socket_head (default: the hole's own).")] = None,
     diameter: Annotated[float | None, Field(description="Sweep with a circular profile: new diameter in mm.")] = None,
     twist: Annotated[float | None, Field(description="Sweep: twist angle along the path in degrees.")] = None,
+    profiles: Annotated[list[str] | None, Field(description="Loft: the profile sketches in order (replace, add or reorder sections). Sweep: [the new profile sketch].")] = None,
+    path: Annotated[str | None, Field(description="Sweep: a new path sketch.")] = None,
+    close: Annotated[bool | None, Field(description="Loft: close the loft back to its first profile (three or more profiles).")] = None,
 ) -> dict:
     """Change how an existing feature is defined without rebuilding it from scratch: an extrude's end
     condition (blind to through-all and back), depth, direction and second side; revolve angle; fillet
@@ -1191,7 +1202,27 @@ def edit_feature(
             if reverse is not None:
                 data.ReverseDirection = reverse
                 changed.append("reverse")
+        elif iface == "ILoftFeatureData":
+            if profiles is not None:
+                if len(profiles) < 2:
+                    raise SwError("A loft needs two or more profiles.")
+                data.Profiles = _dispatch_array([_sketch_feature(doc, x) for x in profiles])
+                changed.append("profiles")
+            if close is not None:
+                data.Close = close
+                changed.append("close")
+            if merge is not None:
+                data.Merge = merge
+                changed.append("merge")
         elif iface == "ISweepFeatureData":
+            if profiles is not None:
+                if data.CircularProfile or len(profiles) != 1:
+                    raise unsupported("profiles (give one sketch, for a sweep with a sketched profile)")
+                data.Profile = _sketch_feature(doc, profiles[0])
+                changed.append("profiles")
+            if path is not None:
+                data.Path = _sketch_feature(doc, path)
+                changed.append("path")
             if diameter is not None:
                 if not data.CircularProfile:
                     raise unsupported("diameter (the sweep has a sketched profile; edit the sketch)")
@@ -1214,7 +1245,8 @@ def edit_feature(
             changed.append("edges")
         given = {k for k, v in dict(end=end, depth=depth, depth2=depth2, reverse=reverse, flip_side_to_cut=flip_side_to_cut, merge=merge, angle=angle,
                                     radius=radius, distance=distance, thickness=thickness, count=count, spacing=spacing, count2=count2,
-                                    spacing2=spacing2, size=size, diameter=diameter, twist=twist).items() if v is not None}
+                                    spacing2=spacing2, size=size, diameter=diameter, twist=twist, profiles=profiles, path=path,
+                                    close=close).items() if v is not None}
         if ignored := sorted(given - set(changed)):
             raise unsupported(", ".join(ignored))
         if not changed:
