@@ -586,6 +586,24 @@ def test_gdt_and_fillets(tmp_path: Path):
             assert len(drw["views"]) == 4
             await c.call("close_document")
 
+            # table- and curve-driven patterns of a hole
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-60, -40], "corner2": [60, 40]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=8)
+            await c.call("start_sketch", on="face@0,8,0")
+            await c.call("sketch", coords="model", entities=[{"type": "circle", "center": [-40, 8, -20], "diameter": 4}])
+            await c.call("finish_sketch")
+            seed = await c.call("extrude", cut=True, end="through_all")
+            table = [[-20, 8, -20], [0, 8, -10], [25, 8, 5], [40, 8, 25]]
+            await c.call("driven_pattern", features=[seed["feature"]], points=table)
+            centres = {(f["axis_point"][0], f["axis_point"][2]) for f in (await c.call("list_faces", type="cylinder"))["faces"] if f.get("hole")}
+            assert centres == {(-40.0, -20.0)} | {(p[0], p[2]) for p in table}
+            await c.call("driven_pattern", features=[seed["feature"]], curve="edge@0,8,40", count=4, spacing=25)
+            assert len([f for f in (await c.call("list_faces", type="cylinder"))["faces"] if f.get("hole")]) == 8
+            await c.call("close_document")
+
             # fillets on fresh blocks: exact volumes
             await c.call("new_document", kind="part")
             await c.call("start_sketch", on="plane:Top")

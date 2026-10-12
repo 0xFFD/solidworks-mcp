@@ -689,6 +689,54 @@ def circular_pattern(
 
 
 @tool(WRITES)
+def driven_pattern(
+    features: Annotated[list[str], Field(description="Feature names to pattern.")],
+    points: Annotated[list[list[float]] | None, Field(description="Table-driven: model points [[x, y, z], ...] in mm for the copies (on one face or plane); a point sketch is made for them.")] = None,
+    on: Annotated[str | None, Field(description="Table-driven: face or plane for the point sketch; default is the face under the first point.")] = None,
+    sketch: Annotated[str | None, Field(description="Sketch-driven: an existing sketch whose points place the copies.")] = None,
+    curve: Annotated[str | None, Field(description="Curve-driven: an edge or sketch the copies follow ('edge@x,y,z', 'sketch:Sketch3').")] = None,
+    count: Annotated[int, Field(ge=2, description="Curve-driven: instances including the seed.")] = 2,
+    spacing: Annotated[float | None, Field(description="Curve-driven: spacing along the curve in mm; omit to spread the instances evenly over the whole curve.")] = None,
+    reverse: Annotated[bool, Field(description="Curve-driven: go the other way along the curve.")] = False,
+) -> dict:
+    """Pattern features at arbitrary positions (table-driven, from a coordinate list), at the points of a
+    sketch, or along a curve (fastener rows that follow an edge, rivet lines, lightening holes)."""
+    doc = SW.active("part")
+    modes = [m for m, v in (("points", points), ("sketch", sketch), ("curve", curve)) if v]
+    if len(modes) != 1:
+        raise SwError("Give exactly one of points, sketch or curve.")
+    if points:
+        from .tools_sketch import _add, start_sketch
+
+        start_sketch(on or "face@{},{},{}".format(*points[0]))
+        sm = doc.SketchManager
+        frame = SketchFrame(SW.cast(sm.ActiveSketch, "ISketch"))
+        sm.AddToDB = True
+        try:
+            for p in points:
+                q = frame.to_sketch([mm(c) for c in p])
+                if abs(q[2]) > 1e-6:
+                    raise SwError(f"Point {p} is not on the sketch face or plane; give on= or points on one face.")
+                _add(doc, sm, {"type": "point", "at": [q[0] * 1000, q[1] * 1000]})
+        finally:
+            sm.AddToDB = False
+        sketch = last_sketch(doc)
+        sm.InsertSketch(True)
+    before = _last_feature(doc).Name
+    doc.ClearSelection2(True)
+    _select_seeds(doc, features, 4)
+    if curve:
+        g.select(doc, curve if ":" in curve or "@" in curve else f"sketch:{curve}", mark=1)
+        doc.FeatureCurvePattern(count, mm(spacing or 0), 1, 0.0, reverse, False, spacing is None, False, True, False, False, False)
+        return created_since(doc, before, "curve pattern", "Check that the curve runs past the seed and that every instance stays on the part.")
+    g.select(doc, f"sketch:{sketch}", mark=64)
+    f = doc.FeatureManager.FeatureSketchDrivenPattern(True, False)
+    out = result(doc, f, "sketch-driven pattern", "Every sketch point must leave the copy on the part.")
+    out["instances"] = len(points) if points else None
+    return out
+
+
+@tool(WRITES)
 def mirror(
     plane: Annotated[str, Field(description="Mirror plane or planar face.")],
     features: Annotated[list[str] | None, Field(description="Features to mirror, or bodies ('body:Name').")] = None,

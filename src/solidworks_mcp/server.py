@@ -36,7 +36,7 @@ Typical part workflow:
    finish_sketch(fully_define=true) closes it and reports whether it is fully defined.
 3. Features use the latest sketch unless one is named: extrude (boss or cut), revolve, sweep, loft, then
    fillet, chamfer, shell, hole (Hole Wizard: plain, counterbore, countersink, tapped, at exact
-   positions), draft, linear_pattern, circular_pattern, mirror, ref_plane, ref_axis, cosmetic_thread,
+   positions), draft, linear_pattern, circular_pattern, driven_pattern (table/sketch/curve), mirror, ref_plane, ref_axis, cosmetic_thread,
    helix (springs, modelled threads). Multibody: list_bodies, combine, move_body, split_body, delete_body,
    surface (surface bodies as split tools), 'body:Name' references.
    edit_feature changes an existing feature's end condition, depth, radius, thickness or pattern count.
