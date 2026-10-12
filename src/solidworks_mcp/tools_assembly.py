@@ -82,7 +82,7 @@ def insert_component(
     return {"component": comp.Name2, "file": str(p), "fixed": bool(comp.IsFixed())}
 
 
-ADVANCED = ("limit_distance", "limit_angle", "width", "symmetric", "gear")
+ADVANCED = ("limit_distance", "limit_angle", "width", "symmetric", "gear", "slot", "hinge")
 
 
 def _entities(doc, refs: list[str]):
@@ -92,7 +92,8 @@ def _entities(doc, refs: list[str]):
 
 
 def _advanced_mate(doc, asm, type: str, refs: list[str], distance: float, angle: float, alignment: str, flip: bool,
-                   minimum: float | None, maximum: float | None, plane: str | None, tab: list[str] | None, ratio: list[float] | None) -> None:
+                   minimum: float | None, maximum: float | None, plane: str | None, tab: list[str] | None, ratio: list[float] | None,
+                   faces: list[str] | None = None, slot_position: str = "free", percent: float | None = None) -> None:
     C = SW.C
     if type in ("limit_distance", "limit_angle"):
         if minimum is None or maximum is None or minimum > maximum:
@@ -121,6 +122,21 @@ def _advanced_mate(doc, asm, type: str, refs: list[str], distance: float, angle:
         data.EntitiesToMate = _entities(doc, refs)
         data.SymmetryPlane = g.resolve(doc, plane).obj
         data.MateAlignment = getattr(C, ALIGN[alignment])
+    elif type == "slot":
+        data = SW.cast(asm.CreateMateData(C.swMateSLOT), "ISlotMateFeatureData")
+        data.EntitiesToMate = _entities(doc, refs)
+        data.Constraint = {"free": C.swSlotMateConstraintOption_Free, "center": C.swSlotMateConstraintOption_Centered,
+                           "distance": C.swSlotMateConstraintOption_Distance, "percent": C.swSlotMateConstraintOption_Percent}[slot_position]
+        if slot_position == "distance":
+            data.Distance = mm(distance)
+        elif slot_position == "percent":
+            data.Percent = float(percent if percent is not None else 50.0) / 100.0
+    elif type == "hinge":
+        if not faces or len(faces) != 2:
+            raise SwError("A hinge mate needs refs = two cylindrical faces (the pivot) and faces = two planar faces that stay in contact.")
+        data = SW.cast(asm.CreateMateData(C.swMateHINGE), "IHingeMateFeatureData")
+        data.SetEntitiesToMate(C.swHingeMateEntityType_Concentric, _entities(doc, refs))
+        data.SetEntitiesToMate(C.swHingeMateEntityType_Coincident, _entities(doc, faces))
     else:  # gear
         if not ratio or len(ratio) != 2 or min(ratio) <= 0:
             raise SwError("A gear mate needs ratio=[teeth or pitch diameter of the first, of the second].")
@@ -136,10 +152,11 @@ def _advanced_mate(doc, asm, type: str, refs: list[str], distance: float, angle:
 @tool(WRITES)
 def add_mate(
     type: Annotated[Literal["coincident", "concentric", "perpendicular", "parallel", "tangent", "distance", "angle", "lock",
-                            "limit_distance", "limit_angle", "width", "symmetric", "gear"], Field(description=(
+                            "limit_distance", "limit_angle", "width", "symmetric", "gear", "slot", "hinge"], Field(description=(
         "Mate type. limit_distance / limit_angle allow travel between minimum and maximum (control surface stops, slides); "
         "width centres a tab between two faces; symmetric places two entities symmetric about plane; gear couples rotation "
-        "of two cylindrical faces or circular edges by ratio."))],
+        "of two cylindrical faces or circular edges by ratio; slot keeps a pin (cylinder or axis) in a slot face; hinge is a "
+        "concentric pivot (refs) plus coincident faces (faces) in one mate."))],
     refs: Annotated[list[str], Field(description="Two references on different components: 'face:Comp-1/N', 'edge:Comp-1/N', 'face@Comp-1/x,y,z', plane names, or 'comp:Name' for lock. Width: the two width faces.")],
     distance: Annotated[float, Field(description="Distance in mm (distance mates; nominal position for limit_distance).")] = 0.0,
     angle: Annotated[float, Field(description="Angle in degrees (angle mates; nominal position for limit_angle).")] = 0.0,
@@ -150,6 +167,9 @@ def add_mate(
     plane: Annotated[str | None, Field(description="symmetric: the symmetry plane.")] = None,
     tab: Annotated[list[str] | None, Field(description="width: the tab's two faces (or one cylindrical face) on the other component.")] = None,
     ratio: Annotated[list[float] | None, Field(description="gear: [first, second] teeth counts or pitch diameters.")] = None,
+    faces: Annotated[list[str] | None, Field(description="hinge: the two planar faces that stay in contact.")] = None,
+    slot_position: Annotated[Literal["free", "center", "distance", "percent"], Field(description="slot: free along the slot, centred, at distance (mm from the slot end) or at percent.")] = "free",
+    percent: Annotated[float | None, Field(description="slot: position along the slot in percent (slot_position='percent').")] = None,
 ) -> dict:
     """Mate two entities of different components, including limit, width, symmetric and gear mates."""
     if len(refs) != 2:
@@ -158,7 +178,7 @@ def add_mate(
     asm = SW.assembly(doc)
     C = SW.C
     if type in ADVANCED:
-        _advanced_mate(doc, asm, type, refs, distance, angle, alignment, flip, minimum, maximum, plane, tab, ratio)
+        _advanced_mate(doc, asm, type, refs, distance, angle, alignment, flip, minimum, maximum, plane, tab, ratio, faces, slot_position, percent)
         doc.EditRebuild3()
         return {"mate": _last_mate(doc), "type": type}
     doc.ClearSelection2(True)

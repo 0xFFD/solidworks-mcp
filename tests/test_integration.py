@@ -459,6 +459,33 @@ def test_advanced_mates_and_explode(tmp_path: Path):
             assert moved["gear40-1"] == [0, 40, 0] and moved["gear20-1"] == [0, 0, -30] and moved["rail-1"] == [0, 0, 0]
             await c.call("exploded_view", show=False)
             assert (await c.call("interference_check"))["interferences"] == 0
+            # a pin centred in a slot, and a hinge between two plates
+            await c.call("save_document", path="assy.sldasm")
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-40, -20], "corner2": [40, 20]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=5)
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "slot", "start": [-20, 0], "end": [20, 0], "width": 8},
+                                             {"type": "circle", "center": [30, 0], "diameter": 6}])
+            await c.call("finish_sketch")
+            await c.call("extrude", cut=True, end="through_all_both")
+            await c.call("save_document", path="slotplate.sldprt")
+            await c.call("close_document")
+            await part("pin.sldprt", [{"type": "circle", "center": [0, 0], "diameter": 8}], "plane:Top", 20)
+            await c.call("insert_component", path="slotplate.sldprt", position=[0, -30, 0])
+            await c.call("add_mate", type="lock", refs=["comp:slotplate-1", "comp:rail-1"])
+            await c.call("insert_component", path="pin.sldprt", position=[10, -35, 7])
+            assert (await c.call("add_mate", type="slot", refs=["face@slotplate-1/24,-27.5,0", "face@pin-1/14,-25,7"], slot_position="center"))["mate"]
+            comps = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
+            assert comps["pin-1"][0] == pytest.approx(0) and comps["pin-1"][2] == pytest.approx(0)  # centred in the slot
+            await c.call("insert_component", path="slotplate.sldprt", position=[15, -20, 5])
+            hinge = await c.call("add_mate", type="hinge", refs=["face@slotplate-1/33,-27.5,0", "face@slotplate-2/48,-17.5,5"],
+                                 faces=["face@slotplate-1/0,-25,15", "face@slotplate-2/15,-20,20"])
+            assert hinge["type"] == "hinge"
+            comps = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
+            assert comps["slotplate-2"][0] == pytest.approx(0) and comps["slotplate-2"][2] == pytest.approx(0)  # pivots on the hole axis
             # GD&T on assembly components
             await c.call("add_datum", face="face@rail-1/0,0,0", label="A")
             frame = await c.call("add_geometric_tolerance", face="face@rail-1/0,10,0", characteristic="parallelism", tolerance=0.05, datums=["A"])

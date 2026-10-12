@@ -33,8 +33,8 @@ All notable changes to this project are documented here. The format follows
   materials with balloons, revision block with revision rows, hole table with tags and callouts).
   `drawing_views` lists the sheets, and `section_view` reports the number of cut faces and warns when the
   cutting line misses the part.
-- Assemblies: `add_mate` adds limit distance and limit angle mates (travel stops), width, symmetric and gear
-  mates, and `exploded_view` builds exploded views from steps along the assembly axes, then shows or
+- Assemblies: `add_mate` adds limit distance and limit angle mates (travel stops), width, symmetric, gear,
+  slot and hinge mates, and `exploded_view` builds exploded views from steps along the assembly axes, then shows or
   collapses them.
 - GD&T: composite position and profile frames (`composite`), projected tolerance zones (`projected_zone`),
   `add_datum_target` (point, circular and rectangular targets), and datums and frames on assembly components.
