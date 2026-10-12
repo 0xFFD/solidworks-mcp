@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `add_geometric_tolerance(unequal=...)` adds the ASME Y14.5-2018 unequally disposed profile modifier
+  (e.g. `0.4 Ⓤ 0.1`).
 - `dimxpert` applies an automatic DimXpert scheme (geometric or plus/minus, prismatic or turned) from chosen
   datum faces and reports each annotation with its nominal and tolerance, for model-based definition; `list`
   and `clear` read and remove it.

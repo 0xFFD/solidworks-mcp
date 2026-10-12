@@ -629,6 +629,10 @@ def test_gdt_and_fillets(tmp_path: Path):
             assert around["applies_to"] == "all_around"
             assert (await c.call("add_geometric_tolerance", face="face@-40,5,10", characteristic="profile_surface", tolerance=0.1, datums=["A"],
                                  between=["X", "Y"]))["between"] == ["X", "Y"]
+            uz = await c.call("add_geometric_tolerance", face="face@40,5,12", characteristic="profile_surface", tolerance=0.4, unequal=0.1, datums=["A"])
+            assert uz["feature_control_frame"] == "|profile_surface|0.4(U)0.1|A"
+            assert "between 0 and the tolerance" in await c.fails("add_geometric_tolerance", face="face@40,5,12", characteristic="profile_surface",
+                                                                  tolerance=0.1, unequal=0.2)
             assert "apply to profile" in await c.fails("add_geometric_tolerance", face="face@10,10,0", characteristic="flatness", tolerance=0.05, applies_to="all_over")
             assert "no larger than the upper" in await c.fails("add_geometric_tolerance", face="face@-40,5,-5", characteristic="position",
                                                                tolerance=0.05, composite={"tolerance": 0.1})

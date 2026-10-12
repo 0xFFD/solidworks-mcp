@@ -141,6 +141,9 @@ def add_geometric_tolerance(
     projected_zone: Annotated[float | None, Field(description="Projected tolerance zone height in mm (P modifier), for position of tapped or press-fit holes.")] = None,
     applies_to: Annotated[Literal["face", "all_around", "all_over"], Field(description="Profile tolerances: just the face, all around this side (circle on the leader), or all over the part.")] = "face",
     between: Annotated[list[str] | None, Field(description="Profile tolerances: limit the zone between two labelled points, e.g. ['X', 'Y'] (shows X <-> Y below the frame).")] = None,
+    unequal: Annotated[float | None, Field(ge=0, description=(
+        "Profile tolerances: unequally disposed zone (ASME Y14.5-2018 U modifier), the part of the tolerance in mm "
+        "that lies outside the true profile (toward adding material); shown as 'tolerance (U) unequal'."))] = None,
 ) -> dict:
     """Feature control frame on a model face (ASME Y14.5 / ISO 1101) of a part or an assembly component,
     with optional composite lower segment and projected tolerance zone. Carried into drawings and STEP AP242."""
@@ -160,6 +163,8 @@ def add_geometric_tolerance(
             raise SwError("The composite lower segment needs a tolerance above 0 and no larger than the upper one.")
     if (applies_to != "face" or between) and characteristic not in ("profile_surface", "profile_line"):
         raise SwError("all_around, all_over and between apply to profile tolerances.")
+    if unequal is not None and (characteristic not in ("profile_surface", "profile_line") or unequal > tolerance):
+        raise SwError("unequal applies to profile tolerances and must be between 0 and the tolerance.")
     if between is not None and len(between) != 2:
         raise SwError("between needs two point labels, e.g. ['X', 'Y'].")
     doc.ClearSelection2(True)
@@ -171,6 +176,11 @@ def add_geometric_tolerance(
     gt = SW.cast(gt, "IGtol")
     gt.SetFrameSymbols2(1, f"<IGTOL-{GCS[characteristic]}>", diameter_zone, MC[material_condition], False, "", "", "", "")
     tol = f"{tolerance:g}"
+    if unequal is not None:
+        # the GD&T font has no circled U, so it comes from Segoe UI Symbol and the frame font is restored after it
+        fmt = SW.cast(SW.cast(gt.GetAnnotation(), "IAnnotation").GetTextFormat(0), "ITextFormat")
+        font = (fmt.TypeFaceName if fmt is not None else "") or "Century Gothic"
+        tol = f'{tol} <FONT name="Segoe UI Symbol">Ⓤ<FONT name="{font}"> {unequal:g}'
     gt.SetFrameValues2(1, tol, "", ds[0], ds[1], ds[2])
     shown = gt.GetFrameSymbols3(1) if hasattr(gt, "GetFrameSymbols3") else None
     if shown is not None and GCS[characteristic] not in str(shown):
@@ -180,6 +190,8 @@ def add_geometric_tolerance(
         return f"|{characteristic}|{'Ø' if dz else ''}{t:g}{'(M)' if mc == 'mmc' else '(L)' if mc == 'lmc' else ''}|" + "|".join(dl or [])
 
     out: dict[str, Any] = {"feature_control_frame": text(tolerance, diameter_zone, material_condition, datums), "face": face}
+    if unequal is not None:
+        out["feature_control_frame"] = out["feature_control_frame"].replace(f"|{tolerance:g}|", f"|{tolerance:g}(U){unequal:g}|", 1)
     if projected_zone:
         gt.SetPTZHeight2(1, 1, True, f"{projected_zone:g}")
         out["projected_zone"] = projected_zone
