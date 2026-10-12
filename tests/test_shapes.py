@@ -136,3 +136,19 @@ def test_frame_chains():
     assert all(len(set(c)) == len(c) for c in parts)
     open_l = [((0, 0), (1, 0)), ((1, 0), (1, 1))]
     assert [sorted(c) for c in shapes.chains(open_l)] == [[0, 1]]
+
+
+def test_rounded_path_3d_bends():
+    pts = [(0, 0, 0), (100, 0, 0), (100, 0, 80), (100, 60, 80)]
+    items = shapes.rounded_path_3d(pts, [0, 10, 10, 0])
+    arcs = [it for it in items if it[0] == "arc"]
+    assert len(arcs) == 2 and [it[0] for it in items] == ["line", "arc", "line", "arc", "line"]
+    s, m, e = arcs[0][1:]
+    assert s == pytest.approx((90, 0, 0)) and e == pytest.approx((100, 0, 10))  # tangent points r back from the corner
+    centre = (90, 0, 10)
+    assert all(math.dist(q, centre) == pytest.approx(10) for q in (s, m, e))
+    # consecutive items join up
+    ends = [(it[1], it[2]) if it[0] == "line" else (it[1], it[3]) for it in items]
+    assert all(math.dist(ends[i][1], ends[i + 1][0]) < 1e-9 for i in range(len(ends) - 1))
+    with pytest.raises(SwError):
+        shapes.rounded_path_3d([(0, 0, 0), (5, 0, 0), (5, 5, 0)], [0, 10, 0])

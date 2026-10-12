@@ -257,3 +257,20 @@ def test_view_gap_search():
     assert _first_gap([(0.03, 0.16), (0.17, 0.41)], 0.172, 0.06, 0.41, 0.012) is None
     # a view in the way is skipped
     assert _first_gap([(0.18, 0.20)], 0.172, 0.06, 0.41, 0.012) == pytest.approx(0.212)
+
+
+def test_screenshot_crop_centres_model():
+    from PIL import Image, ImageDraw
+
+    from solidworks_mcp.tools_inspect import fit_crop
+
+    im = Image.new("RGB", (400, 280))
+    d = ImageDraw.Draw(im)
+    for y in range(280):  # vertical gradient background like SolidWorks
+        d.line([(0, y), (399, y)], fill=(70 - y // 5, 80 - y // 5, 100 - y // 4))
+    d.rectangle([300, 200, 340, 240], fill=(200, 200, 200))  # small model in the lower right corner
+    out = fit_crop(im, 200, 140)
+    assert out.size == (200, 140)
+    px = out.load()
+    assert px[100, 70] == (200, 200, 200)  # the model is now centred
+    assert px[2, 2] != (200, 200, 200)

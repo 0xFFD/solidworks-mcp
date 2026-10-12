@@ -18,8 +18,9 @@ All notable changes to this project are documented here. The format follows
   per-configuration `set_material` and `custom_properties` this gives dash-numbered part variants.
 - `helix` creates helices and spirals from a sketched circle and reports the start point and tangent, so a
   profile can be swept along it for springs, coils and modelled threads.
-- 3D sketches (`start_sketch(on="3d")`) with lines, polylines, splines and points in model coordinates, for
-  sweep paths, tube runs and harnesses.
+- 3D sketches (`start_sketch(on="3d")`) with lines, polylines, 3-point arcs, splines and points in model
+  coordinates, for sweep paths, tube runs and harnesses. A 3D polyline takes a bend `radius` (one value or one
+  per point), so a swept round section gives a bent tube with exact bend arcs.
 - Multibody parts: `list_bodies`, `combine` (add, subtract, common) and `move_body` (move, rotate, copy), and
   `body:Name` references so linear and circular patterns and mirror can repeat bodies.
 - Sketch text takes a `font` and `bold`.
@@ -69,6 +70,8 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- `screenshot` crops to the model, so parts away from the origin are no longer small and off-centre
+  (SolidWorks' zoom to fit also frames hidden reference geometry).
 - `set_dimensions` treated unitless dimensions such as pattern instance counts as millimetres, so setting a
   count of 6 set it to 0.006. `dimensions` now reports their unit as `count`.
 - `set_dimensions` no longer closes a sketch that is open for editing, and says why SolidWorks rejected a

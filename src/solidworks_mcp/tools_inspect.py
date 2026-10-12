@@ -437,6 +437,35 @@ _VIEWS = {"isometric": "*Isometric", "trimetric": "*Trimetric", "dimetric": "*Di
           "top": "*Top", "bottom": "*Bottom", "left": "*Left", "right": "*Right"}
 
 
+def fit_crop(im: Any, width: int, height: int, margin: float = 0.06) -> Any:
+    """Crop a capture to the rendered model and scale it to width x height.
+
+    SolidWorks' zoom to fit also frames hidden reference geometry, so a model away from the origin ends up
+    small and off-centre. The background is a vertical gradient, so a pixel unlike both edge pixels of its
+    row belongs to the model.
+    """
+    from PIL import Image as PILImage
+    from PIL import ImageChops
+
+    w, h = im.size
+    left = im.crop((0, 0, 1, h)).resize((w, h))
+    right = im.crop((w - 1, 0, w, h)).resize((w, h))
+    diff = ImageChops.darker(ImageChops.difference(im, left), ImageChops.difference(im, right)).convert("L")
+    box = diff.point(lambda v: 255 if v > 24 else 0).getbbox()
+    if box is None:
+        return im.resize((width, height), PILImage.LANCZOS)
+    x0, y0, x1, y1 = box
+    cw, ch = (x1 - x0) * (1 + 2 * margin), (y1 - y0) * (1 + 2 * margin)
+    aspect = width / height
+    cw, ch = max(cw, ch * aspect), max(ch, cw / aspect)
+    if cw > w or ch > h:  # the model already fills the frame
+        cw, ch = (w, w / aspect) if w / aspect <= h else (h * aspect, h)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    ax = min(max(cx - cw / 2, 0), w - cw)
+    ay = min(max(cy - ch / 2, 0), h - ch)
+    return im.crop((round(ax), round(ay), round(ax + cw), round(ay + ch))).resize((width, height), PILImage.LANCZOS)
+
+
 @tool(READ_ONLY)
 def screenshot(
     view: Annotated[Literal["current", "isometric", "trimetric", "dimetric", "front", "back", "top", "bottom", "left", "right"], Field(description="Standard view orientation.")] = "isometric",
@@ -453,8 +482,6 @@ def screenshot(
     doc = SW.active()
     if view != "current" and doc_kind(doc) != "drawing":
         doc.ShowNamedView2(_VIEWS[view], -1)
-    if zoom_to_fit:
-        doc.ViewZoomtofit2()
     ext = SW.cast(doc.Extension, "IModelDocExtension")
     C = SW.C
     hide_was = None
@@ -464,12 +491,16 @@ def screenshot(
             ext.SetUserPreferenceToggle(C.swViewDisplayHideAllTypes, 0, True)
         except Exception:
             hide_was = None
+    if zoom_to_fit:  # after hiding, so the fit frames only what the capture shows
+        doc.ViewZoomtofit2()
     doc.GraphicsRedraw2()
     shots = a.settings.workspace / "screenshots"
     shots.mkdir(parents=True, exist_ok=True)
     bmp = shots / f"_shot_{int(time.time() * 1000)}.bmp"
+    model = zoom_to_fit and doc_kind(doc) != "drawing"
+    k = 2 if model and max(width, height) <= 1200 else 1  # oversample so the crop to the model keeps detail
     try:
-        captured = doc.SaveBMP(str(bmp), width, height)
+        captured = doc.SaveBMP(str(bmp), width * k, height * k)
     finally:
         if hide_was is not None:
             ext.SetUserPreferenceToggle(C.swViewDisplayHideAllTypes, 0, hide_was)
@@ -478,6 +509,8 @@ def screenshot(
         raise SwError("SolidWorks could not capture the view.")
     try:
         im = PILImage.open(bmp).convert("RGB")
+        if model:
+            im = fit_crop(im, width, height)
         buf = io.BytesIO()
         im.save(buf, "PNG", optimize=True)
     finally:

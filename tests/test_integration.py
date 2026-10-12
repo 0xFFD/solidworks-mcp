@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -294,10 +295,16 @@ def test_sketch_and_feature_editing(tmp_path: Path):
             spring = await c.call("sweep", path=hx["feature"], profile="Sketch2")
             assert spring["volume_mm3"] == pytest.approx(3.14159265 * 1 * ((3.14159265 * 20) ** 2 + 25) ** 0.5 * 6, rel=0.01)
             await c.call("start_sketch", on="3d")
-            await c.call("sketch", entities=[{"type": "polyline", "points": [[40, 0, 0], [40, 50, 0], [70, 50, 20]]}])
+            await c.call("sketch", entities=[{"type": "polyline", "radius": 8, "points": [[40, 0, 0], [40, 50, 0], [70, 50, 20]]}])
             assert (await c.call("finish_sketch"))["3d"] is True
             await c.call("sweep", path="3DSketch1", circular_diameter=4)
-            assert len((await c.call("list_bodies"))["bodies"]) == 2
+            tube = next(b for b in (await c.call("list_bodies"))["bodies"] if b["name"] == "Sweep2")
+            # bent tube run: straight legs shortened by the tangent length, plus the bend arc
+            l2 = (30**2 + 20**2) ** 0.5
+            theta = math.pi / 2  # the legs (0,1,0) and (30,0,20) are perpendicular
+            tan_len = 8 / math.tan(theta / 2)
+            length = 50 + l2 - 2 * tan_len + 8 * (math.pi - theta)
+            assert tube["volume_mm3"] == pytest.approx(math.pi * 4 * length, rel=1e-4)
 
             # multibody: an overlapping copy of the tube, merged back, and a mirrored spring
             moved = await c.call("move_body", bodies=["body:Sweep2"], translate=[0, 0, 2], copy=True)

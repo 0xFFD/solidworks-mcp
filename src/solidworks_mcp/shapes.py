@@ -221,3 +221,57 @@ def chains(ends: list[tuple[tuple, tuple]]) -> list[list[int]]:
         if i not in used:
             out.append(walk(i, a))
     return out
+
+
+def rounded_path_3d(pts: list[tuple[float, float, float]], radii: list[float], closed: bool = False) -> list[tuple]:
+    """Lines and arcs of a 3D polyline whose corners are bent to the given radii (tube and harness runs).
+
+    Returns ('line', a, b) and ('arc', start, mid, end) items with 3D points. A radius of 0 leaves a sharp corner.
+    """
+    def sub(a, b):
+        return tuple(x - y for x, y in zip(a, b))
+
+    def add(a, b):
+        return tuple(x + y for x, y in zip(a, b))
+
+    def mul(a, k):
+        return tuple(x * k for x in a)
+
+    def unit(a):
+        n = math.sqrt(sum(x * x for x in a))
+        if n < 1e-12:
+            raise SwError("polyline has repeated points.")
+        return mul(a, 1 / n)
+
+    n = len(pts)
+    corners: list[tuple] = []
+    for i in range(n):
+        p, r = pts[i], radii[i]
+        if r <= 0 or (not closed and i in (0, n - 1)):
+            corners.append((p, p, None))
+            continue
+        u, v = unit(sub(pts[i - 1], p)), unit(sub(pts[(i + 1) % n], p))
+        theta = math.acos(max(-1.0, min(1.0, sum(a * b for a, b in zip(u, v)))))
+        if theta < 1e-6 or abs(theta - math.pi) < 1e-6:
+            corners.append((p, p, None))
+            continue
+        t = r / math.tan(theta / 2)
+        lu, lv = math.dist(pts[i - 1], p), math.dist(pts[(i + 1) % n], p)
+        limit_u = lu if (not closed and i - 1 == 0) else lu / 2
+        limit_v = lv if (not closed and i + 1 == n - 1) else lv / 2
+        if t > min(limit_u, limit_v) * (1 + 1e-9):
+            raise SwError(f"Bend radius {r:g} at point {i} is too large for the adjacent segments.")
+        b = unit(add(u, v))
+        centre = add(p, mul(b, r / math.sin(theta / 2)))
+        mid = sub(centre, mul(b, r))
+        corners.append((add(p, mul(u, t)), add(p, mul(v, t)), mid))
+    items: list[tuple] = []
+    segments = n if closed else n - 1
+    for i in range(n):
+        if corners[i][2] is not None:
+            items.append(("arc", corners[i][0], corners[i][2], corners[i][1]))
+        if i < segments:
+            a, b = corners[i][1], corners[(i + 1) % n][0]
+            if math.dist(a, b) > 1e-12:
+                items.append(("line", a, b))
+    return items

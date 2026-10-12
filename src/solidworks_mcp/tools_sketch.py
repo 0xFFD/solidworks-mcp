@@ -305,13 +305,23 @@ def _add3d(sm: Any, e: dict) -> list:
         segs.append((sm.CreateCenterLine if t == "centerline" else sm.CreateLine)(*a, *b))
     elif t == "polyline":
         ps = pts("points")
-        if e.get("radius"):
-            raise SwError("polyline corner radii are not available in a 3D sketch; use a spline, or fillet the swept body.")
-        if e.get("closed"):
-            ps.append(ps[0])
+        closed = bool(e.get("closed"))
+        if closed and len(ps) > 2 and math.dist(ps[0], ps[-1]) < 1e-9:
+            ps.pop()
         if len(ps) < 2:
             raise SwError("polyline needs at least 2 points.")
-        segs += [sm.CreateLine(*ps[k], *ps[k + 1]) for k in range(len(ps) - 1)]
+        r = e.get("radius", 0) or 0
+        radii = [mm(v) for v in r] if isinstance(r, (list, tuple)) else [mm(r)] * len(ps)
+        if len(radii) != len(ps):
+            raise SwError(f"polyline radius list needs one value per point ({len(ps)}).")
+        for it in shapes.rounded_path_3d(ps, radii, closed):  # bend radii for tube and harness runs
+            if it[0] == "line":
+                segs.append(sm.CreateLine(*it[1], *it[2]))
+            else:
+                segs.append(sm.Create3PointArc(*it[1], *it[3], *it[2]))
+    elif t == "arc":
+        (a,), (m,), (b,) = pts("start"), pts("mid"), pts("end")
+        segs.append(sm.Create3PointArc(*a, *b, *m))
     elif t == "spline":
         ps = pts("points")
         if len(ps) < 2:
@@ -321,7 +331,7 @@ def _add3d(sm: Any, e: dict) -> list:
         (a,) = pts("at")
         segs.append(sm.CreatePoint(*a))
     else:
-        raise SwError(f"'{t}' is not available in a 3D sketch. Use line, centerline, polyline, spline or point.")
+        raise SwError(f"'{t}' is not available in a 3D sketch. Use line, centerline, polyline (with optional bend radius), arc (start/mid/end), spline or point.")
     if not segs or any(s is None for s in segs):
         raise SwError(f"SolidWorks rejected the {t} {e}.")
     if e.get("construction"):
@@ -400,7 +410,7 @@ def sketch(
         "{type:'text', at, text, height, angle, spacing, font, bold} (part number marking, at = start of the baseline, spacing scales the character pitch, default 1.0, font a Windows font name such as 'Arial' or a stencil font; extrude-cut it about 0.3 mm). "
         "Any entity can carry mirror:'left_right' | 'up_down' | 'both' to add copies mirrored about the sketch axes, "
         "and construction:true to make it construction geometry. In a 3D sketch (start_sketch on='3d') points are [x, y, z] in model mm "
-        "and the types are line, centerline, polyline (sharp corners), spline and point."))],
+        "and the types are line, centerline, polyline (radius bends the corners, for tube and harness runs), arc {start, mid, end}, spline and point."))],
     coords: Annotated[Literal["sketch", "model"], Field(description="Coordinate space of the points.")] = "sketch",
 ) -> dict:
     """Add geometry to the open sketch at exact coordinates (snapping and inference are bypassed)."""
