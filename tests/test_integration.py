@@ -514,6 +514,8 @@ def test_advanced_mates_and_explode(tmp_path: Path):
             after = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
             moved = {k: [round(a - b, 3) for a, b in zip(after[k], before[k])] for k in before}
             assert moved["gear40-1"] == [0, 40, 0] and moved["gear20-1"] == [0, 0, -30] and moved["rail-1"] == [0, 0, 0]
+            spun = await c.call("exploded_view", steps=[{"components": ["slider-2"], "rotate": 90, "axis": "y"}])
+            assert spun["steps_added"][0]["rotate"] == 90
             await c.call("exploded_view", show=False)
             assert (await c.call("interference_check"))["interferences"] == 0
             # a pin centred in a slot, and a hinge between two plates

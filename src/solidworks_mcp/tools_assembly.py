@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -224,13 +225,15 @@ def add_mate(
 
 
 _AXES = {"x": 0, "y": 1, "z": 2}
+_ROT_AXES = {"x": 1, "y": 2, "z": 0}  # rotation ring index of the explode triad for each assembly axis (measured)
 
 
 @tool(WRITES)
 def exploded_view(
     steps: Annotated[list[dict[str, Any]] | None, Field(description=(
         "Explode steps in order: {components: ['Bracket-1', ...], direction: 'x' | 'y' | 'z' | '-x' | '-y' | '-z' "
-        "(assembly axes), distance: mm}. Omit to just show or hide the exploded view."))] = None,
+        "(assembly axes), distance: mm, rotate: degrees (optional), axis: 'x' | 'y' | 'z' (rotation axis, default the "
+        "direction axis)}. A step may only rotate (distance 0). Omit steps to just show or hide the exploded view."))] = None,
     show: Annotated[bool, Field(description="Show the assembly exploded (true) or collapsed (false) afterwards.")] = True,
 ) -> dict:
     """Exploded view of the active assembly for assembly instructions, manuals and drawings (an isometric
@@ -250,8 +253,9 @@ def exploded_view(
         for i, st in enumerate(steps):
             comps = st.get("components") or []
             dist = float(st.get("distance", 0))
-            if not comps or not dist:
-                raise SwError(f"steps[{i}] needs components and a distance.")
+            angle = float(st.get("rotate", 0))
+            if not comps or not (dist or angle):
+                raise SwError(f"steps[{i}] needs components and a distance or a rotation.")
             direction = str(st.get("direction", "y")).strip().lower()
             reverse = direction.startswith("-")
             if direction.lstrip("-+") not in _AXES:
@@ -260,12 +264,16 @@ def exploded_view(
             for c in comps:
                 g.select(doc, c if c.startswith("comp:") else f"comp:{c}", mark=1)
             # the direction index picks an axis of the move triad, which starts aligned with the assembly axes
-            res = cfg.AddExplodeStep2(mm(abs(dist)), _AXES[direction.lstrip("-+")], reverse != (dist < 0), 0.0, 0, False, False, False)
+            rot_axis = str(st.get("axis", direction.lstrip("-+"))).lower()
+            if rot_axis not in _ROT_AXES:
+                raise SwError(f"steps[{i}]: axis must be x, y or z.")
+            res = cfg.AddExplodeStep2(mm(abs(dist)), _AXES[direction.lstrip("-+")], reverse != (dist < 0), math.radians(abs(angle)),
+                                      _ROT_AXES[rot_axis], angle < 0, False, False)
             step, err = (res if isinstance(res, tuple) else (res, 0))
             doc.ClearSelection2(True)
             if step is None:
                 raise SwError(f"steps[{i}]: SolidWorks could not add the explode step ({const_name('swCreateExplodeStepError_', err)}).")
-            done.append({"components": comps, "direction": direction, "distance": dist})
+            done.append({"components": comps, "direction": direction, "distance": dist, **({"rotate": angle, "axis": rot_axis} if angle else {})})
     names = list(asm.GetExplodedViewNames() or [])
     if not names:
         raise SwError("The assembly has no exploded view yet; give steps.")
