@@ -247,6 +247,14 @@ def test_sketch_and_feature_editing(tmp_path: Path):
             cut = await c.call("extrude", cut=True, depth=2)
             through = await c.call("edit_feature", feature=cut["feature"], end="through_all")
             assert through["volume_mm3"] == pytest.approx(4000 - 3.14159265 * 4 * 5, abs=0.01)
+            # resize Hole Wizard holes in place
+            hw = await c.call("hole", size="M3", kind="tapped", depth=3, positions=[[10, 5, 5], [15, 5, 5]])
+            m4 = await c.call("edit_feature", feature=hw["feature"], size="M4")
+            assert m4["feature"].startswith("M4")
+            radii = {f["radius"] for f in (await c.call("list_faces", type="cylinder"))["faces"] if f.get("hole") and f["axis_point"][0] in (10.0, 15.0)}
+            assert radii == {1.65}  # M4 tap drill 3.3
+            assert "no size" in await c.fails("edit_feature", feature=m4["feature"], size="M99")
+            await c.call("feature_action", features=[m4["feature"]], action="delete")
             two = await c.call("edit_feature", feature="Boss-Extrude1", depth2=4)
             assert two["volume_mm3"] == pytest.approx(through["volume_mm3"] + 800 * 4 - 3.14159265 * 4 * 4, abs=0.5)
 

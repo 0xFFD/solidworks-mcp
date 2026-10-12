@@ -883,7 +883,25 @@ _DEFINITIONS = {
     "BaseBody": "IExtrudeFeatureData2", "Revolution": "IRevolveFeatureData2", "RevCut": "IRevolveFeatureData2",
     "BaseRevolve": "IRevolveFeatureData2", "Fillet": "ISimpleFilletFeatureData2", "Chamfer": "IChamferFeatureData2",
     "Shell": "IShellFeatureData", "LPattern": "ILinearPatternFeatureData", "CirPattern": "ICircularPatternFeatureData",
+    "HoleWzd": "IWizardHoleFeatureData2", "Draft": "IDraftFeatureData2", "Sweep": "ISweepFeatureData", "SweepCut": "ISweepFeatureData",
 }
+_HOLE_STANDARDS = {"ISO": "iso", "ANSI METRIC": "ansi_metric", "ANSI INCH": "ansi_inch"}
+
+
+def _hole_table(data: Any, standard: str | None, fastener: str | None) -> tuple[int, int, str, str]:
+    """Standard and fastener enums for a Hole Wizard redefinition: given, or inferred from the feature."""
+    std = standard or _HOLE_STANDARDS.get(str(data.Standard).strip().upper())
+    if std not in _FASTENERS:
+        raise SwError(f"Unknown hole standard '{data.Standard}'; pass standard=.")
+    table = _FASTENERS[std]
+    if fastener is None:
+        text = str(data.FastenerType).replace(" ", "").lower()
+        fastener = next((k for k, v in table.items() if v.lower().endswith(text) or text.endswith(v.lower().removeprefix(std.replace("_", "")))), None)
+        if fastener is None:
+            raise SwError(f"Could not tell which hole table '{data.FastenerType}' is; pass fastener= (one of {sorted(table)}).")
+    if fastener not in table:
+        raise SwError(f"Fastener '{fastener}' is not available for {std}. Choose from {sorted(table)}.")
+    return getattr(SW.C, _STANDARD[std]), getattr(SW.C, "swStandard" + table[fastener]), std, fastener
 
 
 def _dispatch_array(objs: list[Any]) -> Any:
@@ -912,12 +930,12 @@ def _dimension_with_value(f: Any, value: float, skip: list[str]) -> str:
 def edit_feature(
     feature: Annotated[str, Field(description="Feature name from list_features.")],
     end: Annotated[Literal["blind", "through_all", "through_all_both", "midplane", "up_to_next"] | None, Field(description="Extrude/cut: new end condition.")] = None,
-    depth: Annotated[float | None, Field(description="Extrude/cut: depth in mm (direction 1).")] = None,
+    depth: Annotated[float | None, Field(description="Extrude/cut: depth in mm (direction 1). Hole: hole depth (makes it blind).")] = None,
     depth2: Annotated[float | None, Field(description="Extrude/cut: blind depth in the second direction; 0 removes the second direction.")] = None,
     reverse: Annotated[bool | None, Field(description="Extrude/cut/revolve: flip direction 1.")] = None,
     flip_side_to_cut: Annotated[bool | None, Field(description="Cut: remove the material outside the profile instead.")] = None,
     merge: Annotated[bool | None, Field(description="Boss: merge with the existing bodies.")] = None,
-    angle: Annotated[float | None, Field(description="Revolve: angle in degrees. Circular pattern: total angle (equal spacing) or angle between instances.")] = None,
+    angle: Annotated[float | None, Field(description="Degrees. Revolve: angle; draft: draft angle; chamfer: angle; circular pattern: total angle (equal spacing) or angle between instances.")] = None,
     radius: Annotated[float | None, Field(description="Fillet: radius in mm.")] = None,
     distance: Annotated[float | None, Field(description="Chamfer: distance in mm.")] = None,
     thickness: Annotated[float | None, Field(description="Shell: wall thickness in mm.")] = None,
@@ -926,11 +944,17 @@ def edit_feature(
     spacing: Annotated[float | None, Field(description="Linear pattern: spacing in mm.")] = None,
     count2: Annotated[int | None, Field(ge=1, description="Linear pattern: instances in direction 2.")] = None,
     spacing2: Annotated[float | None, Field(description="Linear pattern: spacing in direction 2, mm.")] = None,
+    size: Annotated[str | None, Field(description="Hole: new size from the Hole Wizard table, e.g. 'M6' (keeps the hole type and positions).")] = None,
+    standard: Annotated[Literal["iso", "ansi_metric", "ansi_inch"] | None, Field(description="Hole: standard for size= (default: the hole's own).")] = None,
+    fastener: Annotated[str | None, Field(description="Hole: table for size= such as clearance, tapped or socket_head (default: the hole's own).")] = None,
+    diameter: Annotated[float | None, Field(description="Sweep with a circular profile: new diameter in mm.")] = None,
+    twist: Annotated[float | None, Field(description="Sweep: twist angle along the path in degrees.")] = None,
 ) -> dict:
     """Change how an existing feature is defined without rebuilding it from scratch: an extrude's end
     condition (blind to through-all and back), depth, direction and second side; revolve angle; fillet
-    radius or edges; chamfer distance; shell thickness; pattern counts and spacing. Plain driving
-    dimensions can also be changed with set_dimensions."""
+    radius or edges; chamfer distance and angle; shell thickness; pattern counts and spacing; Hole Wizard
+    size, depth and end condition; draft angle; sweep diameter and twist. Plain driving dimensions can
+    also be changed with set_dimensions."""
     doc = SW.active("part")
     C = SW.C
     f = g.feature_by_name(doc, feature)
@@ -1021,6 +1045,48 @@ def edit_feature(
             if reverse is not None:
                 data.ReverseDirection = reverse
                 changed.append("reverse")
+        elif iface == "IWizardHoleFeatureData2":
+            if size is not None:
+                std_e, fast_e, std, fastener = _hole_table(data, standard, fastener)
+                if not data.ChangeStandard(std_e, fast_e, size):
+                    raise SwError(f"Hole Wizard has no size '{size}' in {std}/{fastener}.")
+                changed.append("size")
+            if end is not None:
+                if end not in ("blind", "through_all"):
+                    raise unsupported(f"end='{end}'")
+                data.EndCondition = getattr(C, END[end])
+                changed.append("end")
+            if depth is not None:
+                data.EndCondition = C.swEndCondBlind
+                data.HoleDepth = mm(depth)
+                data.Depth = mm(depth)
+                changed.append("depth")
+            if reverse is not None:
+                data.ReverseDirection = reverse
+                changed.append("reverse")
+        elif iface == "IDraftFeatureData2":
+            if angle is not None:
+                data.Angle = rad(angle)
+                changed.append("angle")
+            if reverse is not None:
+                data.ReverseDirection = reverse
+                changed.append("reverse")
+        elif iface == "ISweepFeatureData":
+            if diameter is not None:
+                if not data.CircularProfile:
+                    raise unsupported("diameter (the sweep has a sketched profile; edit the sketch)")
+                data.CircularProfileDiameter = mm(diameter)
+                changed.append("diameter")
+            if twist is not None:
+                data.TwistControlType = C.swTwistControlConstantTwistAlongPath if twist else C.swTwistControlFollowPath
+                data.SetTwistAngle(rad(twist))
+                changed.append("twist")
+            if merge is not None:
+                data.Merge = merge
+                changed.append("merge")
+        if iface == "IChamferFeatureData2" and angle is not None:
+            data.EdgeChamferAngle = rad(angle)
+            changed.append("angle")
         if edges is not None:
             if iface not in ("ISimpleFilletFeatureData2", "IChamferFeatureData2"):
                 raise unsupported("edges")
@@ -1028,7 +1094,7 @@ def edit_feature(
             changed.append("edges")
         given = {k for k, v in dict(end=end, depth=depth, depth2=depth2, reverse=reverse, flip_side_to_cut=flip_side_to_cut, merge=merge, angle=angle,
                                     radius=radius, distance=distance, thickness=thickness, count=count, spacing=spacing, count2=count2,
-                                    spacing2=spacing2).items() if v is not None}
+                                    spacing2=spacing2, size=size, diameter=diameter, twist=twist).items() if v is not None}
         if ignored := sorted(given - set(changed)):
             raise unsupported(", ".join(ignored))
         if not changed:

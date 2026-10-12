@@ -47,6 +47,8 @@ All notable changes to this project are documented here. The format follows
 - `split_body` (by planes, faces, sketches or surface bodies; refuses tools that do not cut), `delete_body`
   (delete or keep bodies) and `surface` (extruded, revolved, lofted, planar and offset surface bodies, listed
   by `list_bodies` and usable as `body:Name` split tools).
+- `edit_feature` also resizes Hole Wizard holes (keeping their positions and table), changes hole depth and
+  end condition, draft angles, chamfer angles, and the diameter and twist of circular-profile sweeps.
 - `hole` takes positions on several faces in one call and makes one Hole Wizard feature per face.
 - `design_guide('sheet_metal')`: bend radii for 5052, 6061, 2024 and 7075 aluminium, stainless and
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
