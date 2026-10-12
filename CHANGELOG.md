@@ -35,6 +35,11 @@ All notable changes to this project are documented here. The format follows
 - Assemblies: `add_mate` adds limit distance and limit angle mates (travel stops), width, symmetric and gear
   mates, and `exploded_view` builds exploded views from steps along the assembly axes, then shows or
   collapses them.
+- GD&T: composite position and profile frames (`composite`), projected tolerance zones (`projected_zone`),
+  `add_datum_target` (point, circular and rectangular targets), and datums and frames on assembly components.
+  Drawings import datum targets.
+- `fillet` takes `kind`: variable radius along an edge, face fillets between two face sets, and full round
+  fillets, each checked to have changed the part.
 - `design_guide('sheet_metal')`: bend radii for 5052, 6061, 2024 and 7075 aluminium, stainless and
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 

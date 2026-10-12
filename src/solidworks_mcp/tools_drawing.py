@@ -22,6 +22,7 @@ GCS = {
     "circular_runout": "SRUN", "total_runout": "TRUN",
 }
 MC = {"none": "", "mmc": "<MOD-MMC>", "lmc": "<MOD-LMC>"}
+_DATUM_TARGET_RE = re.compile(r"^[A-Z]{1,2}\d{1,2}$", re.I)
 _DATUM_RE = re.compile(r"^\s*([A-Z]{1,2}(?:-[A-Z]{1,2})?)\s*(?:[(|]\s*(M|L|S)\s*\)?)?\s*$", re.I)
 
 
@@ -43,9 +44,9 @@ def add_datum(
     face: Annotated[str, Field(description="Datum feature face ('face:N' or 'face@x,y,z').")],
     label: Annotated[str, Field(description="Datum letter, e.g. 'A'.")],
 ) -> dict:
-    """Datum feature symbol on a model face (ASME Y14.5 / ISO 5459). Carried into drawings by
-    create_drawing and into STEP AP242."""
-    doc = SW.active("part")
+    """Datum feature symbol on a model face (ASME Y14.5 / ISO 5459) of a part, or of a component in an
+    assembly ('face@Comp-1/x,y,z'). Carried into drawings by create_drawing and into STEP AP242."""
+    doc = _annotated_doc()
     ref = g.resolve(doc, face)
     if ref.kind != "face":
         raise SwError(f"{face} is not a face.")
@@ -59,6 +60,53 @@ def add_datum(
     dt.SetLabel(label.upper())
     _place(SW.cast(dt.GetAnnotation(), "IAnnotation"), ref.obj)
     return {"datum": label.upper(), "face": face}
+
+
+def _annotated_doc() -> Any:
+    doc = SW.active()
+    if doc_kind(doc) == "drawing":
+        raise SwError("Put datums and tolerances on the part or assembly; create_drawing carries them into the drawing.")
+    return doc
+
+
+@tool(WRITES)
+def add_datum_target(
+    face: Annotated[str, Field(description="Face carrying the target ('face@x,y,z' or 'face@Comp-1/x,y,z').")],
+    at: Annotated[list[float], Field(description="Target location [x, y, z] in model mm, on the face.")],
+    label: Annotated[str, Field(description="Target label, datum letter and number, e.g. 'A1'.")],
+    shape: Annotated[Literal["point", "circle", "rectangle"], Field(description="Point target, or a circular or rectangular target area.")] = "point",
+    size: Annotated[list[float] | None, Field(description="Target area size in mm: [diameter] for circle, [width, height] for rectangle.")] = None,
+) -> dict:
+    """Datum target symbol (ASME Y14.5 / ISO 5459) for parts located on points or small areas, such as
+    castings, forgings and sheet metal."""
+    doc = _annotated_doc()
+    C = SW.C
+    ref = g.resolve(doc, face)
+    if ref.kind != "face":
+        raise SwError(f"{face} is not a face.")
+    p = [mm(c) for c in at]
+    q = ref.obj.GetClosestPointOn(*p)
+    if q is None or sum((a - b) ** 2 for a, b in zip(p, list(q)[:3])) > 1e-10:
+        raise SwError(f"{at} is not on {face}.")
+    m = _DATUM_TARGET_RE.match(label.strip())
+    if not m:
+        raise SwError("The label is a datum letter and target number, e.g. 'A1'.")
+    sz = [float(v) for v in (size or [])]
+    if shape == "circle" and len(sz) != 1 or shape == "rectangle" and len(sz) != 2:
+        raise SwError("size is [diameter] for a circle and [width, height] for a rectangle.")
+    area = {"point": C.swDatumTargetAreaPoint, "circle": C.swDatumTargetAreaCircle, "rectangle": C.swDatumTargetAreaRectangle}[shape]
+    doc.ClearSelection2(True)
+    if not doc.Extension.SelectByID2("", "FACE", p[0], p[1], p[2], False, 0, None, 0):
+        ref.select(doc, append=False)
+    v1, v2 = (mm(sz[0]) if sz else 0.0), (mm(sz[1]) if len(sz) > 1 else 0.0)
+    s1 = f"<MOD-DIAM>{sz[0]:g}" if shape == "circle" else (f"{sz[0]:g}x{sz[1]:g}" if shape == "rectangle" else "")
+    dt = doc.Extension.InsertDatumTargetSymbol2(label.upper(), "", "", area, False, v1, v2, s1, "", True, C.swCLOSED_ARROWHEAD,
+                                      C.swSTRAIGHT, False, shape != "point", True)
+    doc.ClearSelection2(True)
+    if dt is None:
+        raise SwError("SolidWorks could not insert the datum target.")
+    _place(SW.cast(SW.cast(dt, "IDatumTargetSym").GetAnnotation(), "IAnnotation"), ref.obj, 0.025)
+    return {"datum_target": label.upper(), "shape": shape, "size": sz or None, "at": at}
 
 
 def _datum(s: str | None) -> str:
@@ -81,9 +129,14 @@ def add_geometric_tolerance(
     datums: Annotated[list[str] | None, Field(description="Up to three datum references in order of precedence, with an optional material condition: ['A', 'B', 'C(M)'].")] = None,
     diameter_zone: Annotated[bool, Field(description="Cylindrical tolerance zone (diameter symbol), typical for position of holes.")] = False,
     material_condition: Annotated[Literal["none", "mmc", "lmc"], Field(description="Material condition modifier on the tolerance.")] = "none",
+    composite: Annotated[dict[str, Any] | None, Field(description=(
+        "Lower segment of a composite frame (position or profile): {tolerance, datums, material_condition}, e.g. "
+        "{tolerance: 0.05, datums: ['A'], material_condition: 'mmc'} for a pattern-locating / feature-relating position."))] = None,
+    projected_zone: Annotated[float | None, Field(description="Projected tolerance zone height in mm (P modifier), for position of tapped or press-fit holes.")] = None,
 ) -> dict:
-    """Feature control frame on a model face (ASME Y14.5 / ISO 1101). Carried into drawings and STEP AP242."""
-    doc = SW.active("part")
+    """Feature control frame on a model face (ASME Y14.5 / ISO 1101) of a part or an assembly component,
+    with optional composite lower segment and projected tolerance zone. Carried into drawings and STEP AP242."""
+    doc = _annotated_doc()
     ref = g.resolve(doc, face)
     if ref.kind != "face":
         raise SwError(f"{face} is not a face.")
@@ -91,6 +144,8 @@ def add_geometric_tolerance(
     ds += [""] * (3 - len(ds))
     if characteristic in ("flatness", "straightness", "circularity", "cylindricity") and any(ds):
         raise SwError(f"{characteristic} is a form tolerance and takes no datum references.")
+    if composite and characteristic not in ("position", "profile_surface", "profile_line"):
+        raise SwError("Composite frames apply to position and profile tolerances.")
     doc.ClearSelection2(True)
     ref.select(doc, append=False)
     gt = doc.InsertGtol()
@@ -104,9 +159,27 @@ def add_geometric_tolerance(
     shown = gt.GetFrameSymbols3(1) if hasattr(gt, "GetFrameSymbols3") else None
     if shown is not None and GCS[characteristic] not in str(shown):
         raise SwError(f"SolidWorks did not accept the {characteristic} symbol (frame reads {shown}).")
+
+    def text(t: float, dz: bool, mc: str, dl: list[str] | None) -> str:
+        return f"|{characteristic}|{'Ø' if dz else ''}{t:g}{'(M)' if mc == 'mmc' else '(L)' if mc == 'lmc' else ''}|" + "|".join(dl or [])
+
+    out: dict[str, Any] = {"feature_control_frame": text(tolerance, diameter_zone, material_condition, datums), "face": face}
+    if projected_zone:
+        gt.SetPTZHeight2(1, 1, True, f"{projected_zone:g}")
+        out["projected_zone"] = projected_zone
+    if composite:
+        lower_tol = float(composite.get("tolerance", 0))
+        if not 0 < lower_tol <= tolerance:
+            raise SwError("The composite lower segment needs a tolerance above 0 and no larger than the upper one.")
+        lower_mc = str(composite.get("material_condition", material_condition)).lower()
+        lower_datums = list(composite.get("datums") or [])
+        lds = [_datum(d) for d in lower_datums[:3]] + [""] * (3 - len(lower_datums[:3]))
+        gt.SetFrameSymbols2(2, f"<IGTOL-{GCS[characteristic]}>", diameter_zone, MC.get(lower_mc, ""), False, "", "", "", "")
+        gt.SetFrameValues2(2, f"{lower_tol:g}", "", lds[0], lds[1], lds[2])
+        gt.SetCompositeFrame(True)
+        out["composite_lower"] = text(lower_tol, diameter_zone, lower_mc, lower_datums)
     _place(SW.cast(gt.GetAnnotation(), "IAnnotation"), ref.obj, 0.03)
-    frame = f"|{characteristic}|{'Ø' if diameter_zone else ''}{tol}{'(M)' if material_condition == 'mmc' else '(L)' if material_condition == 'lmc' else ''}|" + "|".join(d for d in (datums or []))
-    return {"feature_control_frame": frame, "face": face}
+    return out
 
 
 @tool(WRITES)
@@ -331,7 +404,7 @@ def create_drawing(
             _fit_top_right(SW.cast(iso, "IView"), w, h)
     if annotations:
         types = 0
-        for n in ("swInsertDimensionsMarkedForDrawing", "swInsertDatums", "swInsertGTols", "swInsertSFSymbols", "swInsertNotes",
+        for n in ("swInsertDimensionsMarkedForDrawing", "swInsertDatums", "swInsertDatumTargets", "swInsertGTols", "swInsertSFSymbols", "swInsertNotes",
                   "swInsertCThreads", "swInsertHoleWizardProfileDimensions", "swInsertHoleWizardLocationDimensions", "swInsertholeCallout"):
             types |= getattr(C, n)
         drw.InsertModelAnnotations3(C.swImportModelItemsFromEntireModel, types, True, False, False, False)

@@ -454,6 +454,69 @@ def test_advanced_mates_and_explode(tmp_path: Path):
             assert moved["gear40-1"] == [0, 40, 0] and moved["gear20-1"] == [0, 0, -30] and moved["rail-1"] == [0, 0, 0]
             await c.call("exploded_view", show=False)
             assert (await c.call("interference_check"))["interferences"] == 0
+            # GD&T on assembly components
+            await c.call("add_datum", face="face@rail-1/0,0,0", label="A")
+            frame = await c.call("add_geometric_tolerance", face="face@rail-1/0,10,0", characteristic="parallelism", tolerance=0.05, datums=["A"])
+            assert frame["feature_control_frame"] == "|parallelism|0.05|A"
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
+def test_gdt_and_fillets(tmp_path: Path):
+    """Composite and projected-zone frames, datum targets, GD&T on assembly components, and fillet types."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-40, -25], "corner2": [40, 25]}])
+            await c.call("finish_sketch")
+            base = (await c.call("extrude", depth=10))["volume_mm3"]
+            await c.call("hole", size="M5", kind="simple", positions=[[-30, 10, 15], [30, 10, 15]])
+            await c.call("hole", size="M4", kind="tapped", positions=[[0, 10, -15]])
+            await c.call("add_datum", face="face@10,0,0", label="A")
+            await c.call("add_datum", face="face@-40,5,0", label="B")
+            await c.call("add_datum", face="face@0,5,25", label="C")
+            comp = await c.call("add_geometric_tolerance", face="face@-30,5,12.25", characteristic="position", tolerance=0.2, datums=["A", "B", "C"],
+                                diameter_zone=True, material_condition="mmc", composite={"tolerance": 0.05, "datums": ["A"]})
+            assert comp["composite_lower"] == "|position|Ø0.05(M)|A"
+            ptz = await c.call("add_geometric_tolerance", face="face@0,5,-13.35", characteristic="position", tolerance=0.1, datums=["A", "B", "C"],
+                               diameter_zone=True, projected_zone=12)
+            assert ptz["projected_zone"] == 12
+            assert "Composite frames apply" in await c.fails("add_geometric_tolerance", face="face@10,10,0", characteristic="flatness", tolerance=0.05,
+                                                         composite={"tolerance": 0.01})
+            for label, at, shape, size in (("A1", [-30, 0, 0], "point", None), ("A2", [30, 0, 0], "circle", [6]), ("A3", [0, 0, 10], "rectangle", [8, 4])):
+                t = await c.call("add_datum_target", face="face@10,0,0", at=at, label=label, shape=shape, size=size)
+                assert t["datum_target"] == label
+            await c.call("save_document", path="gdt.sldprt")
+            drw = await c.call("create_drawing", sheet="A3")
+            assert len(drw["views"]) == 4
+            await c.call("close_document")
+
+            # fillets on fresh blocks: exact volumes
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-40, -25], "corner2": [40, 25]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=10)
+            face = await c.call("fillet", kind="face", faces=["face@0,10,0"], faces2=["face@40,5,0"], radius=3)
+            assert base - face["volume_mm3"] == pytest.approx(50 * 9 * (1 - 3.14159265 / 4), abs=0.01)
+            start_z = (await c.call("list_edges", near=[-40, 10, 0], limit=1))["edges"][0]["start"][2]
+            await c.call("fillet", kind="variable", edges=["edge@-40,10,0"], radii=[1, 4])
+            ends = {e["mid"][2]: e["length"] for e in (await c.call("list_edges", type="spline"))["edges"] if e["mid"][0] < -35}
+            # quarter-round profiles at the ends: 1 mm radius at the edge's start, 4 mm at its end
+            assert ends[start_z] == pytest.approx(3.14159265 / 2, rel=0.05) and ends[-start_z] == pytest.approx(2 * 3.14159265, rel=0.05)
+            await c.call("close_document")
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-5, -30], "corner2": [5, 30]}])
+            await c.call("finish_sketch")
+            rib = (await c.call("extrude", depth=20))["volume_mm3"]
+            rnd = await c.call("fillet", kind="full_round", faces=["face@-5,10,0", "face@0,20,0", "face@5,10,0"])
+            assert rib - rnd["volume_mm3"] == pytest.approx(60 * (50 - 3.14159265 * 25 / 2), abs=0.01)
+            assert (await c.call("bounding_box"))["size"][1] == pytest.approx(20)
         finally:
             await c.call("close_document")
 

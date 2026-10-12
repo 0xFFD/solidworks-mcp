@@ -41,10 +41,10 @@ The existing servers cover a few sketch and extrude calls, are written against o
 
 | | solidworks-mcp |
 |---|---|
-| Modelling | 2D and 3D sketches with exact coordinates in sketch or model space, sketch editing (trim, offset, convert edges, relations, driving dimensions, move, rotate, copy, delete), extrude, revolve, sweep (including round sections along a path), helices and spirals for springs and modelled threads, loft, fillet, chamfer, shell, draft, linear and circular patterns of features or bodies, mirror, multibody combine and move/copy, reference planes and axes |
+| Modelling | 2D and 3D sketches with exact coordinates in sketch or model space, sketch editing (trim, offset, convert edges, relations, driving dimensions, move, rotate, copy, delete), extrude, revolve, sweep (including round sections along a path), helices and spirals for springs and modelled threads, loft, fillets (constant, variable radius, face and full round), chamfer, shell, draft, linear and circular patterns of features or bodies, mirror, multibody combine and move/copy, reference planes and axes |
 | Sheet metal | Base flanges from closed outlines or open L, U, Z and hat profiles, edge flanges at any angle with their own bend radius and K-factor, flat pattern size and bend count, flatten and fold, flat-pattern DXF/DWG export with bend lines (blocked without an export-control marking when required) |
 | Holes | Hole Wizard plain, counterbore, countersink (including 100 degree aerospace countersinks) and tapped holes from ISO, ANSI metric and ANSI inch tables, with every centre placed exactly where you ask |
-| GD&T and MBD | Datums, feature control frames (all 14 characteristics, diameter zones, MMC and LMC on tolerances and datums), surface finish symbols and cosmetic threads on the model, carried into drawings and STEP |
+| GD&T and MBD | Datums, datum targets (points, circular and rectangular areas), feature control frames (all 14 characteristics, diameter zones, MMC and LMC on tolerances and datums, composite position and profile frames, projected tolerance zones), surface finish symbols and cosmetic threads on parts or assembly components, carried into drawings and STEP |
 | Drawings | Standard three views plus isometric in first or third angle projection, model dimensions, hole callouts and GD&T imported, section, detail, projected and auxiliary views, any model view or sheet metal flat pattern view on further sheets, reference dimensions between model edges, bills of materials with balloons, revision blocks with revision rows, hole tables, notes, PDF and DWG export. Drawings take the part's units and drafting standard |
 | Engineering data | Materials from the SolidWorks databases (with density, yield and modulus) plus a bundled database of generic CFRP, aramid, G10/FR4 and engineering polymer grades, custom properties for part number, revision and markings, equations and global variables, configurations (part variants with their own dimensions and suppressed features), ASME or ISO drafting standard |
 | Design knowledge | `design_guide` with workflows, multirotor and fixed-wing sizing, standard mounting patterns, ISO 273 clearances, tap drills, edge distances, machining, sheet metal (bend radii by alloy, K-factors, hole-to-bend distances, an avionics tray recipe), composite and additive rules, quick stiffness checks and release checks |
@@ -113,11 +113,11 @@ All lengths are millimetres and all angles degrees, in both directions, whatever
 | Model tree and edits | `list_features`, `dimensions`, `set_dimensions`, `edit_feature` (end conditions, depths, directions, radii, thickness, pattern counts), `configurations`, `equations`, `feature_action` (suppress, unsuppress, delete; per configuration), `undo`, `rebuild` |
 | Geometry and checks | `list_faces`, `list_edges`, `measure`, `mass_properties`, `bounding_box`, `check_geometry`, `screenshot` |
 | Engineering data | `list_materials`, `set_material`, `custom_properties` |
-| GD&T | `add_datum`, `add_geometric_tolerance`, `add_surface_finish`, `add_note` |
+| GD&T | `add_datum`, `add_datum_target`, `add_geometric_tolerance` (incl. composite frames and projected zones), `add_surface_finish`, `add_note` |
 | Drawings | `create_drawing`, `drawing_views`, `section_view`, `detail_view`, `projected_view`, `auxiliary_view`, `add_view` (model or flat pattern), `sheets`, `drawing_dimension`, `drawing_table` (BOM with balloons, revision block, hole table) |
 | Assemblies | `insert_component`, `list_components`, `add_mate` (including limit, width, symmetric and gear mates), `exploded_view`, `interference_check`, `bom` (parts list with mass budget) |
 
-77 tools and one prompt (`design`) in total. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`) so clients can approve reads automatically and ask before deleting or closing.
+78 tools and one prompt (`design`) in total. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`) so clients can approve reads automatically and ask before deleting or closing.
 
 ### Picking faces and edges
 
@@ -165,7 +165,7 @@ Copy the log to write-once storage if you need it to survive a determined admini
 
 **Read-only mode.** `--read-only` allows only the tools that do not change models or files, for design reviews and audits.
 
-**No code execution.** There is no tool that runs macros, scripts or arbitrary API calls. Everything the agent can do is one of the 77 tools above.
+**No code execution.** There is no tool that runs macros, scripts or arbitrary API calls. Everything the agent can do is one of the 78 tools above.
 
 **Engineering standards.** `document_settings` switches between ASME Y14.5 and ISO drafting standards, `create_drawing` supports third and first angle projection, GD&T is applied to model faces (model-based definition), holes come from the standard Hole Wizard tables rather than hand-drawn circles, `finish_sketch(fully_define=true)` produces fully defined sketches, and `check_geometry` runs the SolidWorks body check before release.
 
@@ -179,12 +179,12 @@ The tools cover the common path from a blank part to a released drawing. Plenty 
 - **Sheet metal beyond flanges.** Base and edge flanges, flat patterns and DXF blanks work. Hems, jogs, miter flanges, sketched bends, closed corners, forming tools, gauge tables and converting a solid to sheet metal are not available. Base-flange bends use the SolidWorks default K-factor (0.5); only edge flanges take their own.
 - **Editing what already exists.** `edit_feature` redefines extrudes, cuts, revolves, fillets, chamfers, shells and patterns. Sweeps, lofts, drafts, Hole Wizard holes and reference geometry still have to be deleted and built again to change anything other than their dimensions.
 - **Detailed sketch work.** There is no extend, split, sketch pattern, sketch block or spline editing. Engraved text is placed one character at a time.
-- **Advanced features.** Fillets are constant radius only (no variable, face or full round fillets). There are no sketch, curve or table driven patterns. Holes go on planar faces, one face per call. Bodies can be combined, moved and copied, but not split.
+- **Advanced features.** Fillets can be constant, variable (linear between the two ends of one edge), face or full round, but not setback, conic or asymmetric. There are no sketch, curve or table driven patterns. Holes go on planar faces, one face per call. Bodies can be combined, moved and copied, but not split.
 - **Design tables.** Equations, global variables and configurations work, but there are no Excel design tables, and custom properties and materials apply to the whole part rather than per configuration.
 - **Imported geometry.** `import_file` brings STEP, IGES and Parasolid models in as dumb solids: there is no feature recognition, so imported parts can be referenced, measured and mated but not edited by dimension.
 - **Design judgement.** The guide gives rules of thumb and a worked recipe, not analysis. Strength, vibration, thermal and airworthiness decisions stay with engineers.
 - **Drawings beyond the basics.** Broken, break-out, aligned-section and half-section views are not available, dimensions can be added but not moved or restyled afterwards, and the title block is filled only through custom properties. Imported annotations and tables placed without a position often overlap views and need tidying by hand. Reference dimensions and auxiliary views in assembly drawings need component references (`edge@Part-1/x,y,z`) and have only been tested on parts.
-- **Advanced GD&T and MBD.** There are no composite frames, datum targets, projected tolerance zones, DimXpert, tolerance stack-ups or 3D PMI views. GD&T goes on parts, not on assemblies.
+- **Advanced GD&T and MBD.** There is no DimXpert auto-dimensioning, tolerance stack-up analysis, 3D PMI views or annotation views, and frames have no all-around, between or unequally disposed profile modifiers.
 - **Advanced assembly work.** Slot, hinge, cam, rack and pinion, screw and universal joint mates, radial or rotating explode steps, motion studies and sub-assembly restructuring are not available. Explode steps move along the assembly X, Y and Z axes.
 - **Analysis.** It cannot run SolidWorks Simulation, Flow Simulation, Costing or DFM checks. Mass properties, measurement, interference and the body check are the analysis tools available.
 - **Data management.** There is no SOLIDWORKS PDM or vault access, check-in, revision workflow or ECO handling.

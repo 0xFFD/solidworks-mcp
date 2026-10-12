@@ -11,7 +11,7 @@ from . import geometry as g
 from .com import SW, const_name, mm, rad, to_mm
 from .errors import SwError
 from .registry import WRITES, tool
-from .tools_sketch import SketchFrame, last_sketch
+from .tools_sketch import SketchFrame, _doubles, last_sketch
 
 END = {"blind": "swEndCondBlind", "through_all": "swEndCondThroughAll", "through_all_both": "swEndCondThroughAllBoth",
        "midplane": "swEndCondMidPlane", "up_to_next": "swEndCondUpToNext"}
@@ -313,26 +313,73 @@ def loft(
 
 @tool(WRITES)
 def fillet(
-    radius: Annotated[float, Field(description="Radius in mm.")],
-    edges: Annotated[list[str] | None, Field(description="Edges to round ('edge:N', 'edge@x,y,z').")] = None,
-    faces: Annotated[list[str] | None, Field(description="Round every edge of these faces.")] = None,
+    radius: Annotated[float, Field(description="Radius in mm (constant and face fillets).")] = 0.0,
+    edges: Annotated[list[str] | None, Field(description="Edges to round ('edge:N', 'edge@x,y,z'). Variable: one edge.")] = None,
+    faces: Annotated[list[str] | None, Field(description="Constant: round every edge of these faces. Face fillet: the first face set. Full round: [side face, centre face, side face].")] = None,
+    kind: Annotated[Literal["constant", "variable", "face", "full_round"], Field(description=(
+        "constant: one radius on edges; variable: radius changing along one edge from radii[0] at its start to radii[1] at its end; "
+        "face: blend between two face sets (faces and faces2) that need not share an edge; full_round: replace the centre face "
+        "with a full round between two side faces (rib and boss ends)."))] = "constant",
+    radii: Annotated[list[float] | None, Field(description="Variable fillet: [radius at start, radius at end] in mm (list_edges gives the edge's start and end).")] = None,
+    faces2: Annotated[list[str] | None, Field(description="Face fillet: the second face set.")] = None,
     tangent_propagation: bool = True,
 ) -> dict:
-    """Constant-radius fillet on edges (or all edges of faces)."""
+    """Fillets: constant radius on edges, variable radius along an edge, face fillets between face sets,
+    and full round fillets."""
     doc = SW.active("part")
     C = SW.C
-    targets = _edges_from(doc, edges, faces)
-    import pythoncom
-    from win32com.client import VARIANT
-
     fm = doc.FeatureManager
-    data = SW.cast(fm.CreateDefinition(C.swFmFillet), "ISimpleFilletFeatureData2")
-    data.Initialize(C.swConstRadiusFillet)
-    data.DefaultRadius = mm(radius)
-    data.PropagateToTangentFaces = tangent_propagation
-    data.Edges = VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_DISPATCH, [e._oleobj_ for e in targets])
-    f = fm.CreateFeature(data)
-    return result(doc, f, "fillet", "The radius may be too large for the adjacent faces.")
+
+    def face_objs(refs: list[str] | None, what: str) -> list[Any]:
+        out = []
+        for r in refs or []:
+            ref = g.resolve(doc, r)
+            if ref.kind != "face":
+                raise SwError(f"{what}: {r} is not a face.")
+            out.append(ref.obj)
+        return out
+
+    if kind == "constant":
+        if radius <= 0:
+            raise SwError("Give a radius above 0.")
+        data = SW.cast(fm.CreateDefinition(C.swFmFillet), "ISimpleFilletFeatureData2")
+        data.Initialize(C.swConstRadiusFillet)
+        data.DefaultRadius = mm(radius)
+        data.PropagateToTangentFaces = tangent_propagation
+        data.Edges = _dispatch_array(_edges_from(doc, edges, faces))
+        return result(doc, fm.CreateFeature(data), "fillet", "The radius may be too large for the adjacent faces.")
+    # variable, face and full round fillets go through FeatureFillet3 with the selection marks it expects
+    before = _volume(doc)
+    doc.ClearSelection2(True)
+    radii_arr = None
+    if kind == "variable":
+        if not edges or len(edges) != 1 or not radii or len(radii) != 2 or min(radii) <= 0:
+            raise SwError("A variable fillet needs one edge and radii=[start, end], both above 0.")
+        g.select(doc, edges[0])
+        radius, ftyp, radii_arr = radii[0], C.swFeatureFilletType_VariableRadius, _doubles([mm(radii[0]), mm(radii[1])])
+    elif kind == "face":
+        a, b = face_objs(faces, "faces"), face_objs(faces2, "faces2")
+        if not a or not b or radius <= 0:
+            raise SwError("A face fillet needs faces (first set), faces2 (second set) and a radius.")
+        for f in a:
+            g.Ref(f, "face", "face set 1").select(doc, mark=2)
+        for f in b:
+            g.Ref(f, "face", "face set 2").select(doc, mark=4)
+        ftyp = C.swFeatureFilletType_Face
+    else:
+        fs = face_objs(faces, "faces")
+        if len(fs) != 3:
+            raise SwError("A full round fillet needs faces=[side face, centre face, side face].")
+        for f, mark in zip(fs, (2, 512, 4)):
+            g.Ref(f, "face", "full round face").select(doc, mark=mark)
+        radius, ftyp = 0.001, C.swFeatureFilletType_FullRound
+    opts = C.swFeatureFilletPropagate if tangent_propagation else 0
+    f = fm.FeatureFillet3(opts, mm(radius), 0.0, 0.0, ftyp, C.swFilletOverFlowType_Default, 0, radii_arr, None, None, None, None, None, None)
+    what = f"{kind.replace('_', ' ')} fillet"
+    out = result(doc, f, what, "The radius may be too large for the adjacent faces.")
+    if before is not None and out.get("volume_mm3") == before:
+        raise SwError(f"The {what} did not change the part; check the faces (sides and centre for a full round) and the radius.")
+    return out
 
 
 @tool(WRITES)
