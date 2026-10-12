@@ -296,6 +296,8 @@ def test_sketch_and_feature_editing(tmp_path: Path):
             assert spring["volume_mm3"] == pytest.approx(3.14159265 * 1 * ((3.14159265 * 20) ** 2 + 25) ** 0.5 * 6, rel=0.01)
             await c.call("start_sketch", on="3d")
             await c.call("sketch", entities=[{"type": "polyline", "radius": 8, "points": [[40, 0, 0], [40, 50, 0], [70, 50, 20]]}])
+            await c.call("modify_sketch", operations=[{"op": "relation", "type": "along_y", "items": ["seg@40,20,0"]}])
+            assert "conflicts" in await c.fails("modify_sketch", operations=[{"op": "relation", "type": "along_x", "items": ["seg@40,20,0"]}])
             assert (await c.call("finish_sketch"))["3d"] is True
             await c.call("sweep", path="3DSketch1", circular_diameter=4)
             tube = next(b for b in (await c.call("list_bodies"))["bodies"] if b["name"] == "Sweep2")

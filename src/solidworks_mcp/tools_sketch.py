@@ -482,13 +482,15 @@ def finish_sketch(
 
 # ------------------------------------------------------------------------------------------ editing
 
-_SEG_RE = re.compile(r"^(seg|pt)(?::(\d+)|@\s*(-?[\d.]+(?:e-?\d+)?)\s*,\s*(-?[\d.]+(?:e-?\d+)?)\s*)$", re.I)
+_SEG_RE = re.compile(r"^(seg|pt)(?::(\d+)|@\s*(-?[\d.]+(?:e-?\d+)?)\s*,\s*(-?[\d.]+(?:e-?\d+)?)\s*(?:,\s*(-?[\d.]+(?:e-?\d+)?)\s*)?)$", re.I)
 
 RELATIONS = {
     "horizontal": "sgHORIZONTAL2D", "vertical": "sgVERTICAL2D", "coincident": "sgCOINCIDENT", "tangent": "sgTANGENT",
     "parallel": "sgPARALLEL", "perpendicular": "sgPERPENDICULAR", "concentric": "sgCONCENTRIC", "equal": "sgSAMELENGTH",
     "collinear": "sgCOLINEAR", "fixed": "sgFIXED", "midpoint": "sgATMIDDLE", "coradial": "sgCORADIAL",
     "symmetric": "sgSYMMETRIC", "merge": "sgMERGEPOINTS",
+    # 3D sketches: a line along a model axis
+    "along_x": "sgALONGX3D", "along_y": "sgALONGY3D", "along_z": "sgALONGZ3D",
 }
 
 
@@ -557,8 +559,28 @@ def _points(sk: Any) -> list[Any]:
     return SW.cast_all(sk.GetSketchPoints2(), "ISketchPoint")
 
 
+def _xyz(p: Any) -> list[float]:
+    p = SW.cast(p, "ISketchPoint")
+    return [p.X, p.Y, p.Z]
+
+
+def _dist3d(seg: Any, p: list[float]) -> float:
+    """Distance (metres) from a model point to a 3D sketch segment, bounded to the segment."""
+    seg = SW.cast(seg, "ISketchSegment")
+    if seg.GetType() == SW.C.swSketchLINE:
+        ln = SW.cast(seg, "ISketchLine")
+        a, b = _xyz(ln.GetStartPoint2()), _xyz(ln.GetEndPoint2())
+        d = [b[i] - a[i] for i in range(3)]
+        n2 = sum(c * c for c in d) or 1e-30
+        t = max(0.0, min(1.0, sum((p[i] - a[i]) * d[i] for i in range(3)) / n2))
+        return math.dist(p, [a[i] + d[i] * t for i in range(3)])
+    q = SW.cast(seg.GetCurve(), "ICurve").GetClosestPointOn(*p)
+    return math.dist(p, list(q)[:3]) if q is not None else float("inf")
+
+
 def _sketch_item(sk: Any, ref: str) -> Any:
-    """A sketch segment or point: 'seg:N', 'pt:N' (list_sketch indices) or 'seg@x,y', 'pt@x,y' (nearest, sketch mm)."""
+    """A sketch segment or point: 'seg:N', 'pt:N' (list_sketch indices), 'seg@x,y', 'pt@x,y' (nearest, sketch mm)
+    or, in a 3D sketch, 'seg@x,y,z', 'pt@x,y,z' (model mm)."""
     m = _SEG_RE.match(ref.strip())
     if not m:
         raise SwError(f"'{ref}' is not a sketch reference. Use 'seg:N', 'pt:N', 'seg@x,y' or 'pt@x,y' (sketch mm, from list_sketch).")
@@ -570,8 +592,12 @@ def _sketch_item(sk: Any, ref: str) -> Any:
         if i >= len(items):
             raise SwError(f"{ref}: the sketch has {len(items)} {what}. Indices change after edits; run list_sketch again.")
         return items[i]
-    p = (float(m.group(3)), float(m.group(4)))
-    dists = [math.dist(p, _xy(q)) for q in items] if kind == "pt" else [_dist(_seg_geom(s), p) for s in items]
+    if m.group(5) is not None:  # 'seg@x,y,z' in a 3D sketch: model mm
+        p3 = [mm(float(m.group(k))) for k in (3, 4, 5)]
+        dists = [to_mm(math.dist(p3, _xyz(q))) for q in items] if kind == "pt" else [to_mm(_dist3d(s, p3)) for s in items]
+    else:
+        p = (float(m.group(3)), float(m.group(4)))
+        dists = [math.dist(p, _xy(q)) for q in items] if kind == "pt" else [_dist(_seg_geom(s), p) for s in items]
     if not dists:
         raise SwError(f"{ref}: the sketch has no {what}.")
     i = min(range(len(dists)), key=dists.__getitem__)
@@ -811,9 +837,17 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
         _select_items(doc, sk, items)
         rm = SW.cast(sk.RelationManager, "ISketchRelationManager")
         before = rm.GetRelationsCount(C.swAll)
+        was_over = sk.GetConstrainedStatus() in (4, 5, 6)
         doc.SketchAddConstraints(RELATIONS[rel])
         if rm.GetRelationsCount(C.swAll) == before:
             raise SwError(f"SolidWorks did not add the {rel} relation; check that the items suit it and that it does not exist already.")
+        if not was_over and sk.GetConstrainedStatus() in (4, 5, 6):
+            # a conflicting relation over-defines the sketch: take it back out
+            added = SW.cast_all(rm.GetRelations(C.swAll), "ISketchRelation")[before:]
+            for r in added:
+                rm.DeleteRelation(r)
+            doc.ClearSelection2(True)
+            raise SwError(f"The {rel} relation conflicts with the sketch's existing relations or dimensions and was not added.")
     elif kind == "dimension":
         out.update(_dimension(doc, sk, op, items, to_model))
     else:

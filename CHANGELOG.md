@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Relations in 3D sketches: `modify_sketch` takes `seg@x,y,z` / `pt@x,y,z` (model mm) and the `along_x`, `along_y`,
+  `along_z` relations.
 - `trim_members` trims or extends weldment members from separate sketches to meet at mitred or butted corners.
 - `view_dimensions(arrange=true)` packs a view's linear dimensions in rows by size (chained dimensions share a
   row), spaced for their text and kept clear of neighbouring views and the sheet edge.
@@ -89,6 +91,8 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- A sketch relation that conflicted with existing ones was added anyway and left the sketch over-defined;
+  it is now taken back out and reported.
 - `create_drawing` imported model dimensions into every view that could show them, so the same dimension
   appeared two or three times; each is now shown once.
 - A failed `edge_flange` left its profile planes and sketches in the tree (deleting them in one selection
