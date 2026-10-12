@@ -40,6 +40,7 @@ All notable changes to this project are documented here. The format follows
   slot, hinge, rack and pinion, screw (lead set exactly) and universal joint mates, and `exploded_view` builds exploded views from steps along the assembly axes, then shows or
   collapses them.
 - GD&T: composite position and profile frames (`composite`), projected tolerance zones (`projected_zone`),
+  all-around, all-over and between modifiers on profile tolerances (`applies_to`, `between`),
   `add_datum_target` (point, circular and rectangular targets), and datums and frames on assembly components.
   Drawings import datum targets.
 - `fillet` makes asymmetric (`distance2`) and conic (`conic_rho`) fillets, and takes `kind`: variable radius along an edge, face fillets between two face sets, and full round

@@ -590,6 +590,11 @@ def test_gdt_and_fillets(tmp_path: Path):
             ptz = await c.call("add_geometric_tolerance", face="face@0,5,-13.35", characteristic="position", tolerance=0.1, datums=["A", "B", "C"],
                                diameter_zone=True, projected_zone=12)
             assert ptz["projected_zone"] == 12
+            around = await c.call("add_geometric_tolerance", face="face@40,5,12", characteristic="profile_surface", tolerance=0.2, datums=["A"], applies_to="all_around")
+            assert around["applies_to"] == "all_around"
+            assert (await c.call("add_geometric_tolerance", face="face@-40,5,10", characteristic="profile_surface", tolerance=0.1, datums=["A"],
+                                 between=["X", "Y"]))["between"] == ["X", "Y"]
+            assert "apply to profile" in await c.fails("add_geometric_tolerance", face="face@10,10,0", characteristic="flatness", tolerance=0.05, applies_to="all_over")
             assert "Composite frames apply" in await c.fails("add_geometric_tolerance", face="face@10,10,0", characteristic="flatness", tolerance=0.05,
                                                          composite={"tolerance": 0.01})
             for label, at, shape, size in (("A1", [-30, 0, 0], "point", None), ("A2", [30, 0, 0], "circle", [6]), ("A3", [0, 0, 10], "rectangle", [8, 4])):

@@ -133,6 +133,8 @@ def add_geometric_tolerance(
         "Lower segment of a composite frame (position or profile): {tolerance, datums, material_condition}, e.g. "
         "{tolerance: 0.05, datums: ['A'], material_condition: 'mmc'} for a pattern-locating / feature-relating position."))] = None,
     projected_zone: Annotated[float | None, Field(description="Projected tolerance zone height in mm (P modifier), for position of tapped or press-fit holes.")] = None,
+    applies_to: Annotated[Literal["face", "all_around", "all_over"], Field(description="Profile tolerances: just the face, all around this side (circle on the leader), or all over the part.")] = "face",
+    between: Annotated[list[str] | None, Field(description="Profile tolerances: limit the zone between two labelled points, e.g. ['X', 'Y'] (shows X <-> Y below the frame).")] = None,
 ) -> dict:
     """Feature control frame on a model face (ASME Y14.5 / ISO 1101) of a part or an assembly component,
     with optional composite lower segment and projected tolerance zone. Carried into drawings and STEP AP242."""
@@ -146,6 +148,10 @@ def add_geometric_tolerance(
         raise SwError(f"{characteristic} is a form tolerance and takes no datum references.")
     if composite and characteristic not in ("position", "profile_surface", "profile_line"):
         raise SwError("Composite frames apply to position and profile tolerances.")
+    if (applies_to != "face" or between) and characteristic not in ("profile_surface", "profile_line"):
+        raise SwError("all_around, all_over and between apply to profile tolerances.")
+    if between is not None and len(between) != 2:
+        raise SwError("between needs two point labels, e.g. ['X', 'Y'].")
     doc.ClearSelection2(True)
     ref.select(doc, append=False)
     gt = doc.InsertGtol()
@@ -167,6 +173,15 @@ def add_geometric_tolerance(
     if projected_zone:
         gt.SetPTZHeight2(1, 1, True, f"{projected_zone:g}")
         out["projected_zone"] = projected_zone
+    if applies_to == "all_around":
+        gt.SetAllAroundThisSide(True)
+        out["applies_to"] = applies_to
+    elif applies_to == "all_over":
+        gt.SetAllOver(True)
+        out["applies_to"] = applies_to
+    if between:
+        gt.SetBetweenTwoPoints(True, str(between[0]).upper(), str(between[1]).upper())
+        out["between"] = [str(b).upper() for b in between]
     if composite:
         lower_tol = float(composite.get("tolerance", 0))
         if not 0 < lower_tol <= tolerance:
