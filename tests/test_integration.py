@@ -437,6 +437,9 @@ def test_drawing_details(tmp_path: Path):
                                                                        height["dimension"]: {"type": "basic"}}, decimals={dim["dimension"]: 3})
             got = {d["name"]: d.get("tolerance") for d in tol["dimensions"]}
             assert got[dim["dimension"]] == {"type": "bilateral", "plus": 0.1, "minus": 0.02} and got[height["dimension"]] == {"type": "basic"}
+            fit = await c.call("view_dimensions", view=front, tolerance={height["dimension"]: {"type": "fit_with_tolerance", "shaft": "h7"}})
+            h7 = next(d for d in fit["dimensions"] if d["name"] == height["dimension"])["tolerance"]
+            assert h7["shaft"] == "h7" and h7["plus"] == 0 and h7["minus"] == pytest.approx(0.015)  # ISO 286: 10 h7 is 0/-0.015
             holes = await c.call("drawing_table", kind="hole", view=top, face="face@10,10,0", position=[300, 285], anchor="top_left")
             assert len(holes["rows"]) == 6 and holes["rows"][-1][-1].startswith("<MOD-DIAM> 3.30")
             rev = await c.call("drawing_table", kind="revision", revisions=[{"rev": "A", "description": "INITIAL RELEASE", "approved": "QA"}])

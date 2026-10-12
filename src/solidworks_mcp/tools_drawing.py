@@ -1065,7 +1065,8 @@ def view_dimensions(
     move: Annotated[dict[str, list[float]] | None, Field(description="Dimensions to move: {name: [x, y]} with the new text position in sheet mm (names as listed, e.g. 'D1@Sketch1').")] = None,
     tolerance: Annotated[dict[str, dict[str, Any]] | None, Field(description=(
         "Tolerances: {name: {type, plus, minus}} in mm (degrees for angles). Types: none, basic (boxed theoretically exact), "
-        "symmetric (± plus), bilateral (+plus / -minus), limit (shown as upper and lower size), min, max."))] = None,
+        "symmetric (± plus), bilateral (+plus / -minus), limit (shown as upper and lower size), min, max; ISO fits with "
+        "{type: fit | fit_with_tolerance | fit_tolerance_only, hole: 'H7', shaft: 'g6'}."))] = None,
     decimals: Annotated[dict[str, int] | None, Field(description="Decimal places per dimension, {name: places}; the tolerance uses the same.")] = None,
 ) -> dict:
     """List the dimensions shown in a drawing view with their values, tolerances and text positions (sheet
@@ -1085,7 +1086,8 @@ def view_dimensions(
             raise SwError(f"SolidWorks could not move {name}.")
     C = SW.C
     tol_types = {"none": C.swTolNONE, "basic": C.swTolBASIC, "symmetric": C.swTolSYMMETRIC, "bilateral": C.swTolBILAT,
-                 "limit": C.swTolLIMIT, "min": C.swTolMIN, "max": C.swTolMAX}
+                 "limit": C.swTolLIMIT, "min": C.swTolMIN, "max": C.swTolMAX, "fit": C.swTolFIT,
+                 "fit_with_tolerance": C.swTolFITWITHTOL, "fit_tolerance_only": C.swTolFITTOLONLY}
     for name, spec in (tolerance or {}).items():
         if name not in by_name:
             raise SwError(f"No dimension '{name}' in {view}. Dimensions: {sorted(by_name)}")
@@ -1097,7 +1099,13 @@ def view_dimensions(
         conv = (lambda v: math.radians(float(v))) if angular else (lambda v: mm(float(v)))
         tol = SW.cast(dim.Tolerance, "IDimensionTolerance")
         tol.Type = tol_types[kind]
-        if kind in ("symmetric", "bilateral", "limit", "min", "max"):
+        if kind.startswith("fit"):
+            hole, shaft = str(spec.get("hole", "")), str(spec.get("shaft", ""))
+            if not (hole or shaft):
+                raise SwError(f"{name}: a fit needs hole (e.g. 'H7') and/or shaft (e.g. 'g6') classes.")
+            if not tol.SetFitValues(hole, shaft):
+                raise SwError(f"SolidWorks rejected the fit {hole}/{shaft} on {name}.")
+        elif kind in ("symmetric", "bilateral", "limit", "min", "max"):
             plus = float(spec.get("plus", 0))
             minus = float(spec.get("minus", plus if kind == "symmetric" else 0))
             if plus <= 0 and minus <= 0:
@@ -1122,7 +1130,9 @@ def view_dimensions(
         if tol is not None and tol.Type in names_tol and tol.Type != C.swTolNONE:
             back = to_deg if angular else to_mm
             row["tolerance"] = {"type": names_tol[tol.Type]}
-            if tol.Type != C.swTolBASIC:
+            if tol.Type in (C.swTolFIT, C.swTolFITWITHTOL, C.swTolFITTOLONLY):
+                row["tolerance"].update(hole=tol.GetHoleFitValue() or None, shaft=tol.GetShaftFitValue() or None)
+            if tol.Type not in (C.swTolBASIC, C.swTolFIT):
                 row["tolerance"].update(plus=round(back(tol.GetMaxValue()), 4) + 0.0, minus=round(-back(tol.GetMinValue()), 4) + 0.0)
         rows.append(row)
     out: dict[str, Any] = {"view": view, "outline_mm": [round(to_mm(c), 2) for c in _outline(v)], "dimensions": rows}

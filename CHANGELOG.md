@@ -33,7 +33,8 @@ All notable changes to this project are documented here. The format follows
   materials with balloons, revision block with revision rows, hole table with tags and callouts).
   `section_view` takes `points` for half, offset and aligned sections along a cutting path with corners.
   `view_dimensions` lists the dimensions of a view with values, tolerances and positions, moves them, and
-  sets tolerances (symmetric, bilateral, limit, min, max, basic) and decimal places.
+  sets tolerances (symmetric, bilateral, limit, min, max, basic, and ISO fits such as H7/g6 with or without
+  the limit values) and decimal places.
   `broken_view` shortens long parts between two model points, and `breakout_section` cuts away a circular
   region of a view to a depth to show bores and pockets.
   `drawing_views` lists the sheets, and `section_view` reports the number of cut faces and warns when the
