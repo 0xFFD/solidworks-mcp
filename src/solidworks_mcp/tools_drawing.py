@@ -479,8 +479,13 @@ def section_view(
     offset: Annotated[float, Field(description="Offset of the cutting line from the view centre, in model mm.")] = 0.0,
     label: Annotated[str, Field(description="Section label letter.")] = "A",
     flip: Annotated[bool, Field(description="Look in the opposite direction.")] = False,
+    points: Annotated[list[list[float]] | None, Field(description=(
+        "Cutting path with corners as model points [[x, y, z], ...] in mm, for half sections (e.g. from beyond the part "
+        "along the axis to the centre, then out through the side) and offset sections through features that do not line up. "
+        "The path should start and end outside the part. Overrides direction and offset."))] = None,
 ) -> dict:
-    """Full section view through a drawing view; placed beside the parent view."""
+    """Section view through a drawing view: a straight full section, or a half or offset section along a
+    path with corners; placed beside the parent view."""
     doc = SW.active("drawing")
     drw = SW.drawing(doc)
     C = SW.C
@@ -497,22 +502,30 @@ def section_view(
     off = mm(offset) * target["scale"]
     pad = 0.005
     parent = _view(drw, view)
+    if points:
+        if len(points) < 2:
+            raise SwError("A cutting path needs at least two points.")
+        sheet_pts = [_to_sheet(parent, p) for p in points]
+        # the first segment's orientation on the sheet decides where the view goes
+        dx, dy = sheet_pts[1][0] - sheet_pts[0][0], sheet_pts[1][1] - sheet_pts[0][1]
+        direction = "vertical" if abs(dy) >= abs(dx) else "horizontal"
+        path = [_view_sketch_xy(parent, *q) for q in sheet_pts]
+    elif direction == "vertical":
+        path = [_view_sketch_xy(parent, cx + off, y0 - pad), _view_sketch_xy(parent, cx + off, y1 + pad)]
+    else:
+        path = [_view_sketch_xy(parent, x0 - pad, cy + off), _view_sketch_xy(parent, x1 + pad, cy + off)]
+    place = (x1 + (x1 - x0) * 0.75, cy) if direction == "vertical" else (cx, y0 - (y1 - y0) * 0.75)
     sm = doc.SketchManager
     sm.AddToDB = True
     try:
-        if direction == "vertical":
-            a, b = _view_sketch_xy(parent, cx + off, y0 - pad), _view_sketch_xy(parent, cx + off, y1 + pad)
-            place = (x1 + (x1 - x0) * 0.75, cy)
-        else:
-            a, b = _view_sketch_xy(parent, x0 - pad, cy + off), _view_sketch_xy(parent, x1 + pad, cy + off)
-            place = (cx, y0 - (y1 - y0) * 0.75)
-        line = sm.CreateLine(a[0], a[1], 0, b[0], b[1], 0)
+        lines = [sm.CreateLine(a[0], a[1], 0, b[0], b[1], 0) for a, b in zip(path, path[1:])]
     finally:
         sm.AddToDB = False
-    if line is None:
+    if not lines or any(ln is None for ln in lines):
         raise SwError("Could not sketch the cutting line.")
     doc.ClearSelection2(True)
-    SW.cast(line, "ISketchSegment").Select4(False, None)
+    for ln in lines:
+        SW.cast(ln, "ISketchSegment").Select4(True, None)
     opts = C.swCreateSectionView_ChangeDirection if flip else 0
     sv = drw.CreateSectionViewAt5(place[0], place[1], 0, label, opts, None, 0)
     doc.ClearSelection2(True)
