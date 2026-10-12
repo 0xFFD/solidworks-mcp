@@ -1212,6 +1212,31 @@ def test_gauges_and_configuration_table(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_setback_fillet(tmp_path: Path):
+    """A corner where three filleted edges meet, blended with a setback; an impossible setback is refused cleanly."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-40, -25], "corner2": [40, 25]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=10)
+            edges = ["edge@40,10,0", "edge@0,10,-25", "edge@40,5,-25"]
+            plain = await c.call("fillet", radius=3, edges=edges)
+            await c.call("undo")
+            sb = await c.call("fillet", radius=3, edges=edges, setback=[{"vertex": [40, 10, -25], "distance": 6}])
+            assert sb["setback"] and sb["volume_mm3"] < plain["volume_mm3"] - 10  # the setback blend removes more at the corner
+            before = len((await c.call("list_features"))["features"])
+            assert "refused the setback" in await c.fails("fillet", radius=2, edges=["edge@-40,10,0", "edge@0,10,25", "edge@-40,5,25"],
+                                                          setback=[{"vertex": [-40, 10, 25], "distance": 12}])
+            assert len((await c.call("list_features"))["features"]) == before
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

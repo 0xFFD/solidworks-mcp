@@ -311,6 +311,42 @@ def loft(
 # ------------------------------------------------------------------------------------------ dress-up
 
 
+def _apply_setback(doc: Any, f: Any, setback: list[dict[str, Any]]) -> None:
+    """Add setback corners to a constant fillet. SolidWorks only takes them with tangent propagation off;
+    when it refuses, the fillet is removed so nothing half-made is left."""
+    data = SW.cast(f.GetDefinition(), "ISimpleFilletFeatureData2")
+    data.AccessSelections(doc, None)
+    try:
+        edges = SW.cast_all(data.Edges, "IEdge")
+        verts = []
+        for i, sb in enumerate(setback):
+            p = [mm(c) for c in sb.get("vertex") or []]
+            if len(p) != 3 or not sb.get("distance") or float(sb["distance"]) <= 0:
+                raise SwError(f"setback[{i}] needs vertex [x, y, z] and a distance above 0.")
+            v = next((SW.cast(x, "IVertex") for e in edges for x in (e.GetStartVertex(), e.GetEndVertex())
+                      if x is not None and math.dist(list(SW.cast(x, "IVertex").GetPoint())[:3], p) < 1e-5), None)
+            if v is None:
+                raise SwError(f"setback[{i}]: {sb['vertex']} is not a corner of the filleted edges.")
+            verts.append((v, mm(float(sb["distance"]))))
+        data.SetSetbackVertices(_dispatch_array([v for v, _ in verts]))
+        for v, dist in verts:
+            got = data.GetSetbackVertexDistance(v)
+            at = SW.cast_all(got[1], "IEdge") if isinstance(got, tuple) and len(got) > 1 and got[1] else edges
+            data.SetSetbackVertexDistance(v, _dispatch_array(at), _doubles([dist] * len(at)))
+    except BaseException:
+        data.ReleaseSelectionAccess()
+        raise
+    ok = f.ModifyDefinition(data, doc, None)
+    doc.EditRebuild3()
+    if not ok or SW.cast(f.GetDefinition(), "ISimpleFilletFeatureData2").GetSetbackVerticesCount() != len(verts):
+        name = f.Name
+        doc.ClearSelection2(True)
+        f.Select2(False, 0)
+        doc.Extension.DeleteSelection2(SW.C.swDelete_Absorbed)
+        raise SwError(f"SolidWorks refused the setback on {name} (removed): each vertex needs three or more filleted edges, "
+                      "and the setback plus the radius must fit on the edges.")
+
+
 @tool(WRITES)
 def fillet(
     radius: Annotated[float, Field(description="Radius in mm (constant and face fillets).")] = 0.0,
@@ -325,9 +361,12 @@ def fillet(
     distance2: Annotated[float | None, Field(description="Constant: makes an asymmetric fillet with legs radius and distance2 (mm).")] = None,
     conic_rho: Annotated[float | None, Field(gt=0, lt=1, description="Constant: conic profile with this rho instead of a circular arc (0.5 is a parabola, below is flatter, above is fuller).")] = None,
     tangent_propagation: bool = True,
+    setback: Annotated[list[dict[str, Any]] | None, Field(description=(
+        "Constant: setback corners where three or more filleted edges meet, [{vertex: [x, y, z], distance: mm}]; the blend "
+        "starts that far back along each edge for a smoother corner (castings, machined pockets). Turns tangent propagation off."))] = None,
 ) -> dict:
-    """Fillets: constant radius on edges (optionally asymmetric or with a conic profile), variable radius
-    along an edge, face fillets between face sets, and full round fillets."""
+    """Fillets: constant radius on edges (optionally asymmetric, with a conic profile or setback corners), variable
+    radius along an edge, face fillets between face sets, and full round fillets."""
     doc = SW.active("part")
     C = SW.C
     fm = doc.FeatureManager
@@ -353,9 +392,14 @@ def fillet(
         if conic_rho is not None:
             data.ConicTypeForCrossSectionProfile = C.swFeatureFilletConicRho
             data.DefaultConicRhoOrRadius = float(conic_rho)
-        data.PropagateToTangentFaces = tangent_propagation
+        data.PropagateToTangentFaces = tangent_propagation and not setback
         data.Edges = _dispatch_array(_edges_from(doc, edges, faces))
-        return result(doc, fm.CreateFeature(data), "fillet", "The radius may be too large for the adjacent faces.")
+        out = result(doc, fm.CreateFeature(data), "fillet", "The radius may be too large for the adjacent faces.")
+        if setback:
+            _apply_setback(doc, g.feature_by_name(doc, out["feature"]), setback)
+            out = result(doc, g.feature_by_name(doc, out["feature"]), "fillet")
+            out["setback"] = setback
+        return out
     # variable, face and full round fillets go through FeatureFillet3 with the selection marks it expects
     before = _volume(doc)
     doc.ClearSelection2(True)

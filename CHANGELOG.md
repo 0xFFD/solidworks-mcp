@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Setback fillets: `fillet(setback=[{vertex, distance}])` blends corners where three or more filleted edges meet
+  (SolidWorks only takes setbacks with tangent propagation off); a refused setback leaves no fillet behind.
 - `sheet_metal_base(k_factor=...)` sets the part's K-factor (through the template sheet metal feature, the only
   one SolidWorks honours); a gauge table's K-factor is applied automatically and `flat_pattern` reports it.
 - `jog` steps a sheet off its plane by a given offset with two opposite sketched bends, solving their spacing
