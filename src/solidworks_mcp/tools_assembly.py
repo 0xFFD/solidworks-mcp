@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
@@ -82,21 +82,85 @@ def insert_component(
     return {"component": comp.Name2, "file": str(p), "fixed": bool(comp.IsFixed())}
 
 
+ADVANCED = ("limit_distance", "limit_angle", "width", "symmetric", "gear")
+
+
+def _entities(doc, refs: list[str]):
+    from .tools_features import _dispatch_array
+
+    return _dispatch_array([g.resolve(doc, r).obj for r in refs])
+
+
+def _advanced_mate(doc, asm, type: str, refs: list[str], distance: float, angle: float, alignment: str, flip: bool,
+                   minimum: float | None, maximum: float | None, plane: str | None, tab: list[str] | None, ratio: list[float] | None) -> None:
+    C = SW.C
+    if type in ("limit_distance", "limit_angle"):
+        if minimum is None or maximum is None or minimum > maximum:
+            raise SwError(f"A {type} mate needs minimum <= maximum.")
+        if type == "limit_distance":
+            data = SW.cast(asm.CreateMateData(C.swMateDISTANCE), "IDistanceMateFeatureData")
+            data.Distance, data.MinimumDistance, data.MaximumDistance = mm(distance), mm(minimum), mm(maximum)
+        else:
+            data = SW.cast(asm.CreateMateData(C.swMateANGLE), "IAngleMateFeatureData")
+            data.Angle, data.MinimumAngle, data.MaximumAngle = rad(angle), rad(minimum), rad(maximum)
+        data.IsAdvancedMate = True
+        data.FlipDimension = flip
+        data.MateAlignment = getattr(C, ALIGN[alignment])
+        data.EntitiesToMate = _entities(doc, refs)
+    elif type == "width":
+        if len(refs) != 2 or not tab or len(tab) not in (1, 2):
+            raise SwError("A width mate needs refs = the two width faces of one component and tab = two faces (or one cylinder) of the other.")
+        data = SW.cast(asm.CreateMateData(C.swMateWIDTH), "IWidthMateFeatureData")
+        data.WidthSelection = _entities(doc, refs)
+        data.TabSelection = _entities(doc, tab)
+        data.ConstraintType = C.swMateWidth_Centered
+    elif type == "symmetric":
+        if not plane:
+            raise SwError("A symmetric mate needs plane= (the symmetry plane).")
+        data = SW.cast(asm.CreateMateData(C.swMateSYMMETRIC), "ISymmetricMateFeatureData")
+        data.EntitiesToMate = _entities(doc, refs)
+        data.SymmetryPlane = g.resolve(doc, plane).obj
+        data.MateAlignment = getattr(C, ALIGN[alignment])
+    else:  # gear
+        if not ratio or len(ratio) != 2 or min(ratio) <= 0:
+            raise SwError("A gear mate needs ratio=[teeth or pitch diameter of the first, of the second].")
+        data = SW.cast(asm.CreateMateData(C.swMateGEAR), "IGearMateFeatureData")
+        data.EntitiesToMate = _entities(doc, refs)
+        data.GearRatioNumerator, data.GearRatioDenominator = float(ratio[0]), float(ratio[1])
+        data.Reverse = flip
+    doc.ClearSelection2(True)
+    if asm.CreateMate(data) is None:
+        raise SwError(f"SolidWorks could not add the {type} mate. Check that the entities suit this mate type.")
+
+
 @tool(WRITES)
 def add_mate(
-    type: Annotated[Literal["coincident", "concentric", "perpendicular", "parallel", "tangent", "distance", "angle", "lock"], Field(description="Mate type.")],
-    refs: Annotated[list[str], Field(description="Two references on different components: 'face:Comp-1/N', 'edge:Comp-1/N', 'face@Comp-1/x,y,z', plane names, or 'comp:Name' for lock.")],
-    distance: Annotated[float, Field(description="Distance in mm (distance mates).")] = 0.0,
-    angle: Annotated[float, Field(description="Angle in degrees (angle mates).")] = 0.0,
+    type: Annotated[Literal["coincident", "concentric", "perpendicular", "parallel", "tangent", "distance", "angle", "lock",
+                            "limit_distance", "limit_angle", "width", "symmetric", "gear"], Field(description=(
+        "Mate type. limit_distance / limit_angle allow travel between minimum and maximum (control surface stops, slides); "
+        "width centres a tab between two faces; symmetric places two entities symmetric about plane; gear couples rotation "
+        "of two cylindrical faces or circular edges by ratio."))],
+    refs: Annotated[list[str], Field(description="Two references on different components: 'face:Comp-1/N', 'edge:Comp-1/N', 'face@Comp-1/x,y,z', plane names, or 'comp:Name' for lock. Width: the two width faces.")],
+    distance: Annotated[float, Field(description="Distance in mm (distance mates; nominal position for limit_distance).")] = 0.0,
+    angle: Annotated[float, Field(description="Angle in degrees (angle mates; nominal position for limit_angle).")] = 0.0,
     alignment: Annotated[Literal["aligned", "anti_aligned", "closest"], Field(description="Normal alignment.")] = "closest",
-    flip: Annotated[bool, Field(description="Flip the dimension side (distance/angle mates).")] = False,
+    flip: Annotated[bool, Field(description="Flip the dimension side (distance/angle mates) or reverse a gear.")] = False,
+    minimum: Annotated[float | None, Field(description="limit_distance (mm) / limit_angle (deg): lower limit.")] = None,
+    maximum: Annotated[float | None, Field(description="limit_distance (mm) / limit_angle (deg): upper limit.")] = None,
+    plane: Annotated[str | None, Field(description="symmetric: the symmetry plane.")] = None,
+    tab: Annotated[list[str] | None, Field(description="width: the tab's two faces (or one cylindrical face) on the other component.")] = None,
+    ratio: Annotated[list[float] | None, Field(description="gear: [first, second] teeth counts or pitch diameters.")] = None,
 ) -> dict:
-    """Mate two entities of different components."""
+    """Mate two entities of different components, including limit, width, symmetric and gear mates."""
     if len(refs) != 2:
         raise SwError("A mate needs exactly two references.")
     doc = SW.active("assembly")
     asm = SW.assembly(doc)
     C = SW.C
+    if type in ADVANCED:
+        _advanced_mate(doc, asm, type, refs, distance, angle, alignment, flip, minimum, maximum, plane, tab, ratio)
+        doc.EditRebuild3()
+        return {"mate": _last_mate(doc), "type": type}
     doc.ClearSelection2(True)
     for r in refs:
         g.select(doc, r, mark=1)
@@ -108,6 +172,57 @@ def add_mate(
         raise SwError(f"SolidWorks could not add the {type} mate ({const_name('swAddMateError_', err)}). Check that the entities suit this mate type.")
     doc.EditRebuild3()
     return {"mate": _last_mate(doc), "type": type}
+
+
+_AXES = {"x": 0, "y": 1, "z": 2}
+
+
+@tool(WRITES)
+def exploded_view(
+    steps: Annotated[list[dict[str, Any]] | None, Field(description=(
+        "Explode steps in order: {components: ['Bracket-1', ...], direction: 'x' | 'y' | 'z' | '-x' | '-y' | '-z' "
+        "(assembly axes), distance: mm}. Omit to just show or hide the exploded view."))] = None,
+    show: Annotated[bool, Field(description="Show the assembly exploded (true) or collapsed (false) afterwards.")] = True,
+) -> dict:
+    """Exploded view of the active assembly for assembly instructions, manuals and drawings (an isometric
+    drawing view of the assembly shows it once the view is set to exploded in SolidWorks)."""
+    doc = SW.active("assembly")
+    asm = SW.assembly(doc)
+    cfg = SW.cast(doc.ConfigurationManager.ActiveConfiguration, "IConfiguration")
+    done = []
+    if steps:
+        if not list(asm.GetExplodedViewNames() or []):
+            asm.ShowExploded2(False, "")
+            if not asm.CreateExplodedView():
+                raise SwError("SolidWorks could not create an exploded view.")
+            # a new exploded view starts with an automatic chain step that moves every component; drop it
+            for k in reversed(range(cfg.GetNumberOfExplodeSteps())):
+                cfg.DeleteExplodeStep(SW.cast(cfg.GetExplodeStep(k), "IExplodeStep").Name)
+        for i, st in enumerate(steps):
+            comps = st.get("components") or []
+            dist = float(st.get("distance", 0))
+            if not comps or not dist:
+                raise SwError(f"steps[{i}] needs components and a distance.")
+            direction = str(st.get("direction", "y")).strip().lower()
+            reverse = direction.startswith("-")
+            if direction.lstrip("-+") not in _AXES:
+                raise SwError(f"steps[{i}]: direction must be x, y, z, -x, -y or -z.")
+            doc.ClearSelection2(True)
+            for c in comps:
+                g.select(doc, c if c.startswith("comp:") else f"comp:{c}", mark=1)
+            # the direction index picks an axis of the move triad, which starts aligned with the assembly axes
+            res = cfg.AddExplodeStep2(mm(abs(dist)), _AXES[direction.lstrip("-+")], reverse != (dist < 0), 0.0, 0, False, False, False)
+            step, err = (res if isinstance(res, tuple) else (res, 0))
+            doc.ClearSelection2(True)
+            if step is None:
+                raise SwError(f"steps[{i}]: SolidWorks could not add the explode step ({const_name('swCreateExplodeStepError_', err)}).")
+            done.append({"components": comps, "direction": direction, "distance": dist})
+    names = list(asm.GetExplodedViewNames() or [])
+    if not names:
+        raise SwError("The assembly has no exploded view yet; give steps.")
+    asm.ShowExploded2(show, names[0])
+    doc.EditRebuild3()
+    return {"exploded_view": names[0], "steps_added": done, "exploded": show}
 
 
 def _last_mate(doc) -> str | None:

@@ -32,13 +32,17 @@ All notable changes to this project are documented here. The format follows
   materials with balloons, revision block with revision rows, hole table with tags and callouts).
   `drawing_views` lists the sheets, and `section_view` reports the number of cut faces and warns when the
   cutting line misses the part.
+- Assemblies: `add_mate` adds limit distance and limit angle mates (travel stops), width, symmetric and gear
+  mates, and `exploded_view` builds exploded views from steps along the assembly axes, then shows or
+  collapses them.
 - `design_guide('sheet_metal')`: bend radii for 5052, 6061, 2024 and 7075 aluminium, stainless and
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
 - `set_dimensions` treated unitless dimensions such as pattern instance counts as millimetres, so setting a
   count of 6 set it to 0.006. `dimensions` now reports their unit as `count`.
-- `set_dimensions` no longer closes a sketch that is open for editing.
+- `set_dimensions` no longer closes a sketch that is open for editing, and says why SolidWorks rejected a
+  value (for example outside a limit mate's range) instead of always blaming a driven dimension.
 - `list_edges` could report a `mid` point off the edge when the edge runs against its curve's
   parameter direction, so `edge@` references built from it failed. Every reported midpoint now lies on
   its edge.

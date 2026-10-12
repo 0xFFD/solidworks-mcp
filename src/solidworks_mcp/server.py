@@ -53,7 +53,8 @@ Typical part workflow:
    DXF, DWG, PNG), create_drawing (standard views, model dimensions and GD&T), section_view, add_note;
    detail_view, projected_view, auxiliary_view, add_view (incl. flat_pattern), sheets, drawing_dimension,
    drawing_table (bom with balloons, revision block, hole table).
-Assemblies: insert_component (origin at position), add_mate, list_components, interference_check, bom (mass budget).
+Assemblies: insert_component (origin at position), add_mate (incl. limit_distance/limit_angle travel stops, width,
+symmetric, gear), exploded_view, list_components, interference_check, bom (mass budget).
 Results are proposals for an engineer to review; check every model and drawing before release.
 """
 

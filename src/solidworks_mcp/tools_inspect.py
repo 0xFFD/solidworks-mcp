@@ -198,7 +198,9 @@ def set_dimensions(
         sysval = val * math.pi / 180 if kind == C.swDimensionParamTypeDoubleAngular else (mm(val) if kind == C.swDimensionParamTypeDoubleLinear else val)
         r = d.SetSystemValue3(sysval, where, names)
         if r not in (0, None):
-            raise SwError(f"SolidWorks rejected {name} = {val} (code {r}). Driven dimensions cannot be set.")
+            why = {1: "it failed", 2: "the value is invalid, for example outside a limit mate's range", 3: "it is a driven dimension",
+                   5: "the feature is frozen"}.get(r, f"code {r}")
+            raise SwError(f"SolidWorks rejected {name} = {val}: {why}.")
         changed[name] = val
     if doc.SketchManager.ActiveSketch is not None:
         doc.GraphicsRedraw2()  # a rebuild would close the open sketch; it solves on its own

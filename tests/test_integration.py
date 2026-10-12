@@ -408,6 +408,58 @@ def test_drawing_details(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_advanced_mates_and_explode(tmp_path: Path):
+    """Width, limit, gear and symmetric mates, and an exploded view with exact steps."""
+
+    async def body(c: Session):
+        async def part(name, entities, plane, depth):
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on=plane)
+            await c.call("sketch", entities=entities)
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=depth)
+            await c.call("save_document", path=name)
+            await c.call("close_document")
+
+        await part("rail.sldprt", [{"type": "rectangle", "corner1": [-50, -10], "corner2": [50, 10]}], "plane:Top", 10)
+        await part("slider.sldprt", [{"type": "rectangle", "corner1": [-10, -20], "corner2": [10, 20]}], "plane:Top", 8)
+        await part("gear40.sldprt", [{"type": "circle", "center": [0, 0], "diameter": 40}], "plane:Front", 5)
+        await part("gear20.sldprt", [{"type": "circle", "center": [0, 0], "diameter": 20}], "plane:Front", 5)
+        await c.call("new_document", kind="assembly")
+        try:
+            await c.call("insert_component", path="rail.sldprt", fix=True)
+            await c.call("insert_component", path="slider.sldprt", position=[5, 12, 3])
+            await c.call("add_mate", type="coincident", refs=["face@slider-1/5,12,3", "face@rail-1/0,10,0"], alignment="anti_aligned")
+            await c.call("add_mate", type="width", refs=["face@slider-1/5,14,23", "face@slider-1/5,14,-17"], tab=["face@rail-1/0,5,10", "face@rail-1/0,5,-10"])
+            limit = await c.call("add_mate", type="limit_distance", refs=["face@slider-1/-5,14,0", "face@rail-1/-50,5,0"], distance=40, minimum=0, maximum=80)
+            comps = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
+            assert comps["slider-1"] == pytest.approx([0, 10, 0])  # centred by the width mate, 40 mm from the rail end
+            await c.call("set_dimensions", values={f"D1@{limit['mate']}": 70})
+            comps = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
+            assert comps["slider-1"][0] == pytest.approx(30)
+            assert "outside a limit" in await c.fails("set_dimensions", values={f"D1@{limit['mate']}": 100})
+
+            await c.call("insert_component", path="gear40.sldprt", position=[0, 60, 0])
+            await c.call("insert_component", path="gear20.sldprt", position=[30, 60, 0])
+            assert (await c.call("add_mate", type="gear", refs=["face@gear40-1/20,60,2.5", "face@gear20-1/40,60,2.5"], ratio=[40, 20]))["mate"].startswith("Gear")
+            assert (await c.call("add_mate", type="limit_angle", refs=["face@gear40-1/0,73,5", "face@rail-1/0,5,10"], minimum=-20, maximum=20))["mate"]
+            await c.call("insert_component", path="slider.sldprt", position=[30, 40, 0])
+            assert (await c.call("add_mate", type="symmetric", refs=["face@slider-1/40,14,0", "face@slider-2/40,44,0"], plane="plane:Right"))["mate"]
+
+            before = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
+            await c.call("exploded_view", steps=[{"components": ["gear40-1"], "direction": "y", "distance": 40},
+                                                 {"components": ["gear20-1"], "direction": "-z", "distance": 30}])
+            after = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
+            moved = {k: [round(a - b, 3) for a, b in zip(after[k], before[k])] for k in before}
+            assert moved["gear40-1"] == [0, 40, 0] and moved["gear20-1"] == [0, 0, -30] and moved["rail-1"] == [0, 0, 0]
+            await c.call("exploded_view", show=False)
+            assert (await c.call("interference_check"))["interferences"] == 0
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")
