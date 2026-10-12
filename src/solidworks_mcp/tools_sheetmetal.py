@@ -338,3 +338,29 @@ def convert_to_sheet_metal(
     if info.get("bends", 0) < len(bend_edges):
         info["warning"] = f"{len(bend_edges)} bend edges were given but the flat pattern has {info.get('bends', 0)} bends; check the edges."
     return info
+
+
+@tool(WRITES)
+def closed_corner(
+    faces: Annotated[list[str], Field(description="End faces of flanges at the corners to close ('face@x,y,z'; list_faces near the corner shows the small end faces).")],
+) -> dict:
+    """Close the gaps where two flanges meet at a corner of a sheet metal box or tray, by extending one
+    flange's end face up to the other (sealed avionics enclosures, drip-proof trays)."""
+    doc = SW.active("part")
+    _sheet_metal_feature(doc)
+    before = _last_feature(doc).Name
+    doc.ClearSelection2(True)
+    for f in faces:
+        ref = g.resolve(doc, f)
+        if ref.kind != "face":
+            raise SwError(f"{f} is not a face.")
+        ref.select(doc)
+    doc.InsertSheetMetalClosedCorner()
+    doc.ClearSelection2(True)
+    after = _last_feature(doc)
+    if after is None or after.Name == before:
+        raise SwError("SolidWorks could not close the corner; select the end face of a flange where it meets another flange.")
+    out = result(doc, after, "closed corner")
+    if err := feature_error(_flat_pattern(doc)):
+        out["warning"] = f"The part no longer flattens cleanly ({err})."
+    return out

@@ -57,6 +57,7 @@ All notable changes to this project are documented here. The format follows
 - `modify_sketch` also extends and splits segments and makes linear and circular sketch patterns.
 - `driven_pattern`: table-driven (a list of coordinates), sketch-driven and curve-driven feature patterns.
 - `hole` takes positions on several faces in one call and makes one Hole Wizard feature per face.
+- `closed_corner` closes the corner gaps between flanges of sheet metal boxes and trays.
 - `convert_to_sheet_metal` turns a uniform-thickness solid, such as an imported STEP bracket, into sheet metal
   with bends so its flat blank can be reported and exported.
 - Weldments: `structural_member` builds tube, bar, angle and channel members along 2D or 3D sketch lines with

@@ -328,6 +328,9 @@ def test_sheet_metal(tmp_path: Path):
                 assert (await c.call("measure", refs=["edge@{},{},{}".format(*e["mid"])]))["length_mm"] == pytest.approx(e["length"], abs=1e-3)
             await c.call("edge_flange", edges=["edge@0,0,30", "edge@0,0,-30"], length=15)
             await c.call("edge_flange", edges=["edge@50,0,0", "edge@-50,0,0"], length=15)
+            open_volume = (await c.call("mass_properties"))["volume_mm3"]
+            closed = await c.call("closed_corner", faces=["face@50,8.3,29.2", "face@50,8.3,-29.2", "face@-50,8.3,29.2", "face@-50,8.3,-29.2"])
+            assert closed["volume_mm3"] > open_volume and "warning" not in closed
             info = await c.call("flat_pattern")
             assert info["bends"] == 4 and info["state"] == "formed"
             # outer size 100 x 60 kept (material inside); each side adds 15 - r straight plus the bend allowance
