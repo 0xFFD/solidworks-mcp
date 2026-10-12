@@ -1279,6 +1279,35 @@ def test_knit_and_thicken(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_direct_editing_of_imports(tmp_path: Path):
+    """A supplier STEP part with no history: a pocket removed (its split cylinder found whole) and faces moved."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-40, -25], "corner2": [40, 25]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=10)
+        await c.call("start_sketch", on="face@0,10,0")
+        await c.call("sketch", coords="model", entities=[{"type": "circle", "center": [0, 10, 0], "diameter": 10}])
+        await c.call("finish_sketch")
+        await c.call("extrude", cut=True, depth=4)
+        await c.call("save_document", path="supplier.sldprt")
+        await c.call("export", path="supplier.step", step_ap="214")
+        await c.call("close_document")
+        await c.call("import_file", path="supplier.step")
+        try:
+            gone = await c.call("delete_faces", faces=["face@0,6,0", "face@5,8,0"])
+            assert gone["deleted_faces"] == 3 and gone["volume_mm3"] == pytest.approx(80 * 50 * 10)  # both wall halves found
+            assert (await c.call("move_faces", faces=["face@40,5,0"], distance=5))["volume_mm3"] == pytest.approx(85 * 50 * 10)
+            assert (await c.call("move_faces", faces=["face@0,10,0"], distance=-2))["volume_mm3"] == pytest.approx(85 * 50 * 8)
+            assert (await c.call("bounding_box"))["size"] == pytest.approx([85, 8, 50])
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

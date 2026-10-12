@@ -39,7 +39,8 @@ Typical part workflow:
    fillet, chamfer, shell, hole (Hole Wizard: plain, counterbore, countersink, tapped, at exact
    positions), draft, linear_pattern, circular_pattern, driven_pattern (table/sketch/curve), mirror, ref_plane, ref_axis, cosmetic_thread,
    helix (springs, modelled threads). Multibody: list_bodies, combine, move_body, split_body, delete_body,
-   surface (surface bodies as split tools), knit_surfaces (into a solid when closed), thicken (skins), 'body:Name' references.
+   surface (surface bodies as split tools), knit_surfaces (into a solid when closed), thicken (skins), delete_faces and move_faces (direct
+   editing, e.g. defeaturing imported STEP parts), 'body:Name' references.
    edit_feature changes an existing feature's end condition, depth, radius, thickness or pattern count.
    Sheet metal: sheet_metal_base (closed outline or open profile), edge_flange, miter_flange, jog (joggles), hem, forming_tool (dimples, flanged holes, louvres, ribs), sketched_bend, closed_corner, convert_to_sheet_metal, flat_pattern (blank size,
    flatten, DXF export); design_guide('sheet_metal') has bend radii and a tray recipe.

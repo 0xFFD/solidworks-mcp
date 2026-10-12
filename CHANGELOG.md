@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Direct editing: `delete_faces` removes and heals faces (holes, pockets, fillets; the halves of split cylinders
+  on imports are found automatically) and `move_faces` offsets faces, on native and imported bodies alike.
 - `knit_surfaces` joins surface bodies, into a solid when they enclose a volume, and `thicken` turns a surface
   into a solid skin (both need the bodies selected with mark 1, and knitting a solid needs the gap filters on).
 - Setback fillets: `fillet(setback=[{vertex, distance}])` blends corners where three or more filleted edges meet

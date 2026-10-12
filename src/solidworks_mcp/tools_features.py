@@ -1417,3 +1417,76 @@ def thicken(
     if (out.get("volume_mm3") or 0.0) <= before:
         raise SwError("The thicken added no material.")
     return out
+
+
+def _with_split_halves(doc: Any, faces: list[Any]) -> list[Any]:
+    """Add the other pieces of split cylinders (STEP and IGES imports split each cylinder into halves), so a
+    hole is selected whole."""
+    out = list(faces)
+    cyls = []
+    for f in faces:
+        s = SW.cast(f.GetSurface(), "ISurface")
+        if s.IsCylinder():
+            p = list(s.CylinderParams)
+            cyls.append((p[0:3], p[3:6], p[6]))
+    if not cyls:
+        return out
+    for f in g.faces(doc):
+        s = SW.cast(f.GetSurface(), "ISurface")
+        if not s.IsCylinder() or any(SW.app.IsSame(f, x) == 1 for x in out):
+            continue
+        p = list(s.CylinderParams)
+        for o, a, r in cyls:
+            d = [p[i] - o[i] for i in range(3)]
+            t = sum(d[i] * a[i] for i in range(3))
+            off = math.dist(p[0:3], [o[i] + a[i] * t for i in range(3)])
+            if abs(p[6] - r) < 1e-7 and off < 1e-7 and abs(abs(sum(p[3 + i] * a[i] for i in range(3))) - 1) < 1e-9:
+                out.append(f)
+                break
+    return out
+
+
+@tool(WRITES)
+def delete_faces(
+    faces: Annotated[list[str], Field(min_length=1, description="Faces to remove ('face@x,y,z'); the other halves of a split hole are added automatically.")],
+    patch: Annotated[bool, Field(description="Heal the gap by extending the neighbouring faces (removes holes, pockets, fillets and bosses); false leaves an open surface.")] = True,
+) -> dict:
+    """Direct editing: delete faces and heal the body, to remove holes, pockets, fillets or logos from any body,
+    including imported STEP and IGES parts that have no feature history (defeaturing supplier models)."""
+    doc = SW.active("part")
+    picked = _with_split_halves(doc, [g.resolve(doc, f).obj for f in faces])
+    before_faces, before_vol = len(g.faces(doc)), _volume(doc)
+    doc.ClearSelection2(True)
+    for f in picked:
+        g.Ref(f, "face", "face").select(doc, mark=1)
+    ok = doc.InsertDeleteFace2(1 if patch else 0)
+    doc.ClearSelection2(True)
+    doc.EditRebuild3()
+    if not ok or len(g.faces(doc)) >= before_faces:
+        raise SwError("SolidWorks could not delete and heal those faces; include every face of the feature (all walls and the floor).")
+    out: dict[str, Any] = {"deleted_faces": len(picked)}
+    if (v := _volume(doc)) is not None:
+        out["volume_mm3"] = v
+        if before_vol is not None:
+            out["volume_change_mm3"] = round(v - before_vol, 3)
+    return out
+
+
+@tool(WRITES)
+def move_faces(
+    faces: Annotated[list[str], Field(min_length=1, description="Faces to move ('face@x,y,z').")],
+    distance: Annotated[float, Field(description="Offset along each face's outward normal, mm (negative moves inward).")],
+) -> dict:
+    """Direct editing: offset faces of any body, including imported parts with no feature history (thicken a wall,
+    lengthen a boss, open up a clearance)."""
+    doc = SW.active("part")
+    C = SW.C
+    before = _volume(doc)
+    doc.ClearSelection2(True)
+    for f in faces:
+        g.resolve(doc, f).select(doc, mark=1)
+    feat = doc.FeatureManager.InsertMoveFace3(C.swMoveFaceTypeOffset, distance < 0, 0.0, mm(abs(distance)), None, None, C.swEndCondBlind, 0.0)
+    out = result(doc, feat, "move face", "The faces must be on a solid, and the offset must not collapse a neighbouring face.")
+    if before is not None and out.get("volume_mm3") == before:
+        raise SwError("The face move changed nothing.")
+    return out
