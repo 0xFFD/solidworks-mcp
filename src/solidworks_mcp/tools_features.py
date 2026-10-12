@@ -1583,3 +1583,68 @@ def trim_surface(
     out = result(doc, feat, "surface trim")
     out["area_mm2"] = round(sum(f.GetArea() for f in SW.cast_all(kept[0].GetFaces(), "IFace2")) * 1e6, 3)
     return out
+
+
+@tool(WRITES)
+def mould_split(
+    parting_plane: Annotated[str, Field(description="Plane (or planar face) of a flat parting line, e.g. 'plane:Top'.")],
+    margin: Annotated[float, Field(gt=0, description="Mould block wall around the part, mm.")] = 20.0,
+    above: Annotated[float, Field(gt=0, description="Block height on the plane's normal side (cavity), mm.")] = 30.0,
+    below: Annotated[float, Field(gt=0, description="Block depth on the other side (core), mm.")] = 30.0,
+    shrinkage: Annotated[float, Field(ge=0, lt=10, description="Scale the part up by this percentage first (moulding or casting shrinkage).")] = 0.0,
+    part: Annotated[str | None, Field(description="The part body ('body:Name'); default the only solid body.")] = None,
+) -> dict:
+    """Mould or layup tool halves for a part with a flat parting line: a cavity block on one side of the parting
+    plane and a core block on the other, each with the part's shape cut out (composite layup tools, cast and
+    moulded parts). The part is left as it is (scaled by the shrinkage, if any)."""
+    from .tools_sketch import SketchFrame, finish_sketch, sketch, start_sketch
+
+    doc = SW.active("part")
+    C = SW.C
+    solids = g.bodies(doc)
+    body = g.resolve(doc, part if part and part.startswith("body:") else f"body:{part}").obj if part else (solids[0] if len(solids) == 1 else None)
+    if body is None:
+        raise SwError("The part has several bodies; name the one to mould with part='body:Name'.")
+    if shrinkage:
+        k = 1 + shrinkage / 100
+        if doc.FeatureManager.InsertScale(C.swScaleAboutCentroid, True, k, k, k) is None:
+            raise SwError("SolidWorks could not scale the part for shrinkage.")
+        body = SW.cast(SW.part(doc).GetBodies2(0, True)[0], "IBody2") if len(solids) == 1 else g.resolve(doc, part).obj
+    name = body.Name
+    # the part's outline on the parting plane, from its box corners in the plane's sketch coordinates
+    start_sketch(on=parting_plane)
+    frame = SketchFrame(SW.cast(doc.SketchManager.ActiveSketch, "ISketch"))
+    b = list(body.GetBodyBox())
+    pts = [frame.to_sketch([x, y, z]) for x in (b[0], b[3]) for y in (b[1], b[4]) for z in (b[2], b[5])]
+    lo = [min(p[i] for p in pts) * 1000 - margin for i in range(2)]
+    hi = [max(p[i] for p in pts) * 1000 + margin for i in range(2)]
+    sketch(entities=[{"type": "rectangle", "corner1": lo, "corner2": hi}])
+    finish_sketch()
+    before = {x.Name for x in g.bodies(doc)}
+    extrude(depth=above, merge=False, sketch=None)
+    up = [x for x in g.bodies(doc) if x.Name not in before]
+    start_sketch(on=parting_plane)
+    sketch(entities=[{"type": "rectangle", "corner1": lo, "corner2": hi}])
+    finish_sketch()
+    before = {x.Name for x in g.bodies(doc)}
+    extrude(depth=below, merge=False, reverse=True)
+    down = [x for x in g.bodies(doc) if x.Name not in before]
+    if len(up) != 1 or len(down) != 1:
+        raise SwError("Could not build the two mould blocks.")
+    up_name, down_name = up[0].Name, down[0].Name
+    block = sum(x.GetMassProperties(1.0)[3] for x in (up[0], down[0]))
+    part_vol = g.resolve(doc, f"body:{name}").obj.GetMassProperties(1.0)[3]
+    before = {x.Name for x in g.bodies(doc)}
+    move_body(bodies=[f"body:{name}"], copy=True, count=2)
+    copies = [x.Name for x in g.bodies(doc) if x.Name not in before]
+    if len(copies) != 2:
+        raise SwError("Could not copy the part to cut it from the blocks.")
+    halves = {}
+    for side, blk, cp in (("cavity", up_name, copies[0]), ("core", down_name, copies[1])):
+        halves[side] = combine(operation="subtract", main=f"body:{blk}", tools=[f"body:{cp}"])["feature"]  # the result takes the feature's name
+    vols = {k: g.resolve(doc, f"body:{v}").obj.GetMassProperties(1.0)[3] for k, v in halves.items()}
+    if abs(sum(vols.values()) + part_vol - block) > 1e-9 * max(block, 1e-9) + 1e-12:
+        raise SwError("The mould halves and the part do not add up to the block; check the part lies within the block.")
+    return {"part": name, "cavity": {"body": halves["cavity"], "volume_mm3": round(vols["cavity"] * 1e9, 3)},
+            "core": {"body": halves["core"], "volume_mm3": round(vols["core"] * 1e9, 3)},
+            "block_mm3": round(block * 1e9, 3), "shrinkage_percent": shrinkage}

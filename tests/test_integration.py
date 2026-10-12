@@ -1397,6 +1397,37 @@ def test_motion_study(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_mould_split(tmp_path: Path):
+    """Core and cavity blocks for a drafted part on a flat parting line, and for a part the plane runs through."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "center_rectangle", "center": [0, 0], "size": [60, 40]}])
+            await c.call("finish_sketch")
+            part = (await c.call("extrude", depth=20, draft=3))["volume_mm3"]
+            m = await c.call("mould_split", parting_plane="plane:Top", margin=20, above=30, below=30)
+            assert m["core"]["volume_mm3"] == pytest.approx(100 * 80 * 30) and m["cavity"]["volume_mm3"] == pytest.approx(100 * 80 * 30 - part)
+            assert len((await c.call("list_bodies"))["bodies"]) == 3  # part, cavity, core
+        finally:
+            await c.call("close_document")
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "circle", "center": [0, 0], "diameter": 20}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=40)
+            m = await c.call("mould_split", parting_plane="plane:Top", margin=10, above=20, below=20, shrinkage=0.5)
+            assert m["core"]["volume_mm3"] == pytest.approx(m["cavity"]["volume_mm3"])  # the plane halves the cylinder
+            scaled = math.pi * (10 * 1.005) ** 2 * 40 * 1.005
+            assert m["block_mm3"] == pytest.approx(m["core"]["volume_mm3"] * 2 + scaled, rel=1e-6)
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

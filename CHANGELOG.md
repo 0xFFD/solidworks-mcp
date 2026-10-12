@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `mould_split` makes core and cavity blocks for a part with a flat parting line (layup tools, moulds, casting
+  patterns), optionally scaling the part for shrinkage; the halves and the part add up to the block.
 - `motion_study` drives an assembly with rotary (rpm) and linear (mm/s) motors in Basic Motion and reports how far
   each component moved and turned at chosen times (each read as the end of a solve to that time, since the
   stored frames are coarse and Calculate returns before solving), then puts the model back as it was.
