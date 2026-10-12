@@ -165,10 +165,12 @@ def edge_flange(
             0.0, C.swSheetMetalReliefRectangular, 0.5, 0.0, 0.0, C.swFlangeDimTypeInnerVirtualSharp, cba)
     finally:
         doc.ClearSelection2(True)
-        if f is None:  # leave no profile planes or sketches behind
+        if f is None:  # leave no profile planes or sketches behind; one at a time, a joint delete misses some
             for feat in sketches + planes:
-                feat.Select2(True, 0)
-            doc.Extension.DeleteSelection2(C.swDelete_Absorbed)
+                doc.ClearSelection2(True)
+                feat.Select2(False, 0)
+                doc.Extension.DeleteSelection2(C.swDelete_Absorbed)
+            doc.ClearSelection2(True)
         else:
             for p in planes:
                 p.Select2(True, 0)
@@ -365,4 +367,85 @@ def closed_corner(
     out = result(doc, after, "closed corner")
     if err := feature_error(_flat_pattern(doc)):
         out["warning"] = f"The part no longer flattens cleanly ({err})."
+    return out
+
+
+def _free_vertex(e0: Any, e1: Any | None) -> list[float]:
+    """End point of the first edge of a chain that the second edge does not touch (where the profile goes)."""
+    ends = [list(SW.cast(v, "IVertex").GetPoint())[:3] for v in (e0.GetStartVertex(), e0.GetEndVertex())]
+    if e1 is None:
+        return ends[0]
+    other = [list(SW.cast(v, "IVertex").GetPoint())[:3] for v in (e1.GetStartVertex(), e1.GetEndVertex())]
+    return max(ends, key=lambda p: min(math.dist(p, q) for q in other))
+
+
+@tool(WRITES)
+def miter_flange(
+    edges: Annotated[list[str], Field(min_length=1, description="Connected straight edges of the sheet, in order around the part ('edge@x,y,z' on the top or bottom face).")],
+    length: Annotated[float, Field(gt=0, description="Flange height in mm, from the sheet face.")],
+    position: Annotated[Literal["material_inside", "material_outside", "bend_outside"], Field(description="Where the flanges sit relative to the edges.")] = "material_inside",
+    bend_radius: Annotated[float | None, Field(description="Inside bend radius in mm; default is the part's.")] = None,
+    gap: Annotated[float, Field(ge=0, description="Rip gap at the mitred corners, mm.")] = 0.1,
+) -> dict:
+    """Miter flange: one continuous flange along a chain of edges with mitred corners (trays, enclosures,
+    avionics boxes), from a straight profile generated square to the sheet at the free end of the chain."""
+    doc = SW.active("part")
+    C = SW.C
+    _sheet_metal_feature(doc)
+    if any(g.resolve(doc, e).kind != "edge" for e in edges):
+        raise SwError("Give straight edges ('edge@x,y,z').")
+    e0, sheet, _ = _edge_faces(doc, edges[0])
+    e1 = g.resolve(doc, edges[1]).obj if len(edges) > 1 else None
+    p = _free_vertex(e0, e1)
+    n = _unit(list(sheet.Normal))
+    fm = doc.FeatureManager
+    doc.ClearSelection2(True)
+    g.Ref(e0, "edge", edges[0]).select(doc, mark=0)
+    vertex = next(v for v in (e0.GetStartVertex(), e0.GetEndVertex()) if math.dist(list(SW.cast(v, "IVertex").GetPoint())[:3], p) < 1e-9)
+    data = SW.cast(SW.cast(doc.SelectionManager, "ISelectionMgr").CreateSelectData(), "ISelectData")
+    data.Mark = 1
+    SW.cast(vertex, "IEntity").Select4(True, data)
+    before = _last_feature(doc).Name
+    fm.InsertRefPlane(C.swRefPlaneReferenceConstraint_Perpendicular, 0, C.swRefPlaneReferenceConstraint_Coincident, 0, 0, 0)
+    plane = _last_feature(doc)
+    if plane is None or plane.Name == before:
+        doc.ClearSelection2(True)
+        raise SwError(f"Could not build the profile plane at the end of {edges[0]}.")
+    skf = f = None
+    try:
+        doc.ClearSelection2(True)
+        plane.Select2(False, 0)
+        sm = doc.SketchManager
+        sm.InsertSketch(True)
+        sk = SW.cast(sm.ActiveSketch, "ISketch")
+        frame = SketchFrame(sk)
+        a, b = frame.to_sketch(p), frame.to_sketch([p[i] + n[i] * mm(length) for i in range(3)])
+        sm.AddToDB = True
+        try:
+            sm.CreateLine(a[0], a[1], 0, b[0], b[1], 0)
+        finally:
+            sm.AddToDB = False
+        name = sketch_name(doc, sk)
+        sm.InsertSketch(True)
+        skf = g.feature_by_name(doc, name)
+        doc.ClearSelection2(True)
+        skf.Select2(False, 0)
+        for e in edges:
+            g.resolve(doc, e).select(doc, mark=0)
+        f = fm.InsertSheetMetalMiterFlange(bend_radius is None, mm(bend_radius or 0), mm(gap), True, False, 0.5, 0.0, 0.0,
+                                           C.swSheetMetalReliefRectangular, False, getattr(C, _POSITION[position]), 0.0, 0.0, None)
+    finally:
+        doc.ClearSelection2(True)
+        if f is None:
+            for feat in (skf, plane):  # one at a time: deleting both in one selection leaves one behind
+                if feat is not None:
+                    doc.ClearSelection2(True)
+                    feat.Select2(False, 0)
+                    doc.Extension.DeleteSelection2(C.swDelete_Absorbed)
+            doc.ClearSelection2(True)
+        else:
+            plane.Select2(False, 0)
+            doc.BlankRefGeom()
+    out = result(doc, f, "miter flange", "The edges must be connected straight edges on one face of the sheet, listed in order.")
+    out["edges"] = len(edges)
     return out

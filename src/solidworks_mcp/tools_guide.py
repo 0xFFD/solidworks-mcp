@@ -275,7 +275,8 @@ RECIPE: AVIONICS TRAY
 1. start_sketch('plane:Top'); sketch rectangle of the outer footprint; finish_sketch.
 2. sheet_metal_base(thickness=1.6, bend_radius=1.6) (5052-H32 or 6061-T6).
 3. edge_flange(edges=['edge@0,0,W/2', 'edge@0,0,-W/2'], length=H) then the two short sides; the
-   flange rises on the side of the face the edge belongs to.
+   flange rises on the side of the face the edge belongs to. Or one miter_flange along the chain of
+   edges in order (mitred corners with a small rip gap), which keeps the corners tidy for welding.
 4. Mounting holes with hole(...) on the floor and flanges (keep them 2.5 t + r from the bends).
 5. set_material, custom_properties; flat_pattern() to read the blank size and bend count.
 6. save_document, then flat_pattern(export='part_flat.dxf') for laser or punch programming.

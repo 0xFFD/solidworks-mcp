@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `miter_flange` runs one flange along a chain of connected edges with mitred corners, from a profile
+  generated square to the sheet at the free end of the chain.
 - `add_geometric_tolerance(unequal=...)` adds the ASME Y14.5-2018 unequally disposed profile modifier
   (e.g. `0.4 Ⓤ 0.1`).
 - `dimxpert` applies an automatic DimXpert scheme (geometric or plus/minus, prismatic or turned) from chosen
@@ -80,6 +82,8 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- A failed `edge_flange` left its profile planes and sketches in the tree (deleting them in one selection
+  missed some); they are now removed one by one.
 - A `center_rectangle` drawn inside another on the same centre was pulled to the outer rectangle's proportions
   by its construction diagonals, so rectangular tube profiles had a distorted inner wall (40x30x3 came out
   369 mm2 instead of 384). Centre rectangles are now drawn from their corners, and cached generated profiles are

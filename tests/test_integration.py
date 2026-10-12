@@ -383,6 +383,20 @@ def test_sheet_metal(tmp_path: Path):
             # outer legs 60 and 40, less 2 x (r + t), plus the bend allowance pi/2 x (r + K t)
             assert conv["bends"] == 1 and conv["flat_size_mm"][0] == pytest.approx(100 - 8 + 3.14159265 / 2 * (2 + 0.5 * 2), abs=0.01)
             await c.call("close_document")
+            # a tray: one miter flange around three sides of a 100 x 60 x 2 blank
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-50, -30], "corner2": [50, 30]}])
+            await c.call("finish_sketch")
+            await c.call("sheet_metal_base", thickness=2, bend_radius=2)
+            before = len((await c.call("list_features"))["features"])
+            assert "connected straight edges" in await c.fails("miter_flange", edges=["edge@-50,-1,-30", "edge@0,0,30"], length=20)
+            assert len((await c.call("list_features"))["features"]) == before  # no profile plane or sketch left behind
+            tray = await c.call("miter_flange", edges=["edge@0,0,-30", "edge@50,0,0", "edge@0,0,30"], length=20)
+            assert tray["type"] == "SMMiteredFlange"
+            ba = 3.14159265 / 2 * (2 + 0.5 * 2)
+            flat = (await c.call("flat_pattern"))["flat_size_mm"]
+            assert flat == pytest.approx([96 + ba + 18, 52 + 2 * (ba + 18)], abs=0.01)  # outer 22 mm flanges, 4 mm setback per bend
         finally:
             await c.call("close_document")
 
