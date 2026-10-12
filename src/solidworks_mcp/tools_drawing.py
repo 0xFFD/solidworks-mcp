@@ -1035,3 +1035,50 @@ def breakout_section(
     if out["cut_faces"] <= 0:
         out["warning"] = "The break-out cut no material; increase depth or move the centre onto the part."
     return out
+
+
+def _view_dims(v: Any) -> list[tuple[str, Any, Any]]:
+    """(short name, IDisplayDimension, IDimension) for every dimension shown in a view."""
+    out = []
+    dd = v.GetFirstDisplayDimension5()
+    while dd is not None:
+        dd = SW.cast(dd, "IDisplayDimension")
+        dim = SW.cast(dd.GetDimension2(0), "IDimension")
+        if dim is not None:
+            out.append(("@".join(dim.FullName.split("@")[:2]), dd, dim))
+        dd = dd.GetNext5()
+    return out
+
+
+@tool(WRITES)
+def view_dimensions(
+    view: Annotated[str, Field(description="View name.")],
+    move: Annotated[dict[str, list[float]] | None, Field(description="Dimensions to move: {name: [x, y]} with the new text position in sheet mm (names as listed, e.g. 'D1@Sketch1').")] = None,
+) -> dict:
+    """List the dimensions shown in a drawing view with their values and text positions (sheet mm), and
+    move any of them to tidy overlapping or crowded annotations."""
+    doc = SW.active("drawing")
+    drw = SW.drawing(doc)
+    v = _view(drw, view)
+    dims = _view_dims(v)
+    by_name = {n: (dd, dim) for n, dd, dim in dims}
+    for name, pos in (move or {}).items():
+        if name not in by_name:
+            raise SwError(f"No dimension '{name}' in {view}. Dimensions: {sorted(by_name)}")
+        if len(pos) < 2:
+            raise SwError(f"{name}: the position is [x, y] in sheet mm.")
+        ann = SW.cast(by_name[name][0].GetAnnotation(), "IAnnotation")
+        if not ann.SetPosition2(mm(pos[0]), mm(pos[1]), 0.0):
+            raise SwError(f"SolidWorks could not move {name}.")
+    if move:
+        doc.GraphicsRedraw2()
+    rows = []
+    for name, dd, dim in _view_dims(v):
+        angular = dim.GetType() == SW.C.swDimensionParamTypeDoubleAngular
+        val = dim.SystemValue
+        rows.append({"name": name, "value": round(to_deg(val), 4) if angular else round(to_mm(val), 4), "unit": "deg" if angular else "mm",
+                     "position_mm": [round(to_mm(c), 2) for c in list(SW.cast(dd.GetAnnotation(), "IAnnotation").GetPosition())[:2]]})
+    out: dict[str, Any] = {"view": view, "outline_mm": [round(to_mm(c), 2) for c in _outline(v)], "dimensions": rows}
+    if move:
+        out["moved"] = sorted(move)
+    return out

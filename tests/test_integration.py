@@ -425,6 +425,8 @@ def test_drawing_details(tmp_path: Path):
             assert not any(r[0] < b[2] and b[0] < r[2] and r[1] < b[3] and b[1] < r[3] for b in boxes)
             dim = await c.call("drawing_dimension", view=front, refs=["edge@-40,5,20", "edge@40,5,20"], orientation="horizontal")
             assert dim["value"] == pytest.approx(80)
+            moved = await c.call("view_dimensions", view=front, move={dim["dimension"]: [95, 140]})
+            assert next(d for d in moved["dimensions"] if d["name"] == dim["dimension"])["position_mm"] == [95.0, 140.0]
             holes = await c.call("drawing_table", kind="hole", view=top, face="face@10,10,0", position=[300, 285], anchor="top_left")
             assert len(holes["rows"]) == 6 and holes["rows"][-1][-1].startswith("<MOD-DIAM> 3.30")
             rev = await c.call("drawing_table", kind="revision", revisions=[{"rev": "A", "description": "INITIAL RELEASE", "approved": "QA"}])

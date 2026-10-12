@@ -53,7 +53,7 @@ Typical part workflow:
    add_surface_finish (GD&T on part or assembly component faces, carried into drawings).
 7. Output: save_document (native files), export (STEP AP242/AP214/AP203, IGES, Parasolid, STL, 3MF, PDF,
    DXF, DWG, PNG), create_drawing (standard views, model dimensions and GD&T), section_view, add_note;
-   detail_view, projected_view, auxiliary_view, broken_view, breakout_section, add_view (incl. flat_pattern), sheets, drawing_dimension,
+   detail_view, projected_view, auxiliary_view, broken_view, breakout_section, add_view (incl. flat_pattern), sheets, drawing_dimension, view_dimensions,
    drawing_table (bom with balloons, revision block, hole table).
 Assemblies: insert_component (origin at position), add_mate (incl. limit_distance/limit_angle travel stops, width,
 symmetric, gear, slot, hinge, rack_pinion, screw, universal_joint), exploded_view, list_components, interference_check, bom (mass budget).
