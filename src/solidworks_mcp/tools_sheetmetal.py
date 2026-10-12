@@ -224,3 +224,79 @@ def flat_pattern(
         if mark:
             out["marking"] = mark
     return out
+
+
+_HEMS = {"open": "swHemTypeOpen", "closed": "swHemTypeClosed", "teardrop": "swHemTypeTearDrop", "rolled": "swHemTypeRolled", "double": "swHemTypeDouble"}
+
+
+@tool(WRITES)
+def hem(
+    edges: Annotated[list[str], Field(description="Straight edges of the sheet to hem ('edge@x,y,z').")],
+    kind: Annotated[Literal["closed", "open", "teardrop", "rolled", "double"], Field(description="Hem type: closed (flat, folded back), open (with a gap), teardrop, rolled or double.")] = "closed",
+    length: Annotated[float, Field(gt=0, description="Hem length in mm (closed, open, double).")] = 6.0,
+    gap: Annotated[float, Field(ge=0, description="Gap in mm (open hems).")] = 0.5,
+    radius: Annotated[float, Field(ge=0, description="Radius in mm (teardrop and rolled hems).")] = 1.0,
+    angle: Annotated[float, Field(description="Angle in degrees (teardrop and rolled hems).")] = 200.0,
+    outside: Annotated[bool, Field(description="Put the hem outside the edge instead of inside the existing outline.")] = False,
+    reverse: Annotated[bool, Field(description="Fold to the other side of the sheet.")] = False,
+) -> dict:
+    """Hem along sheet edges: stiffens and removes the sharp edge of covers, panels and access doors."""
+    doc = SW.active("part")
+    C = SW.C
+    _sheet_metal_feature(doc)
+    before = _last_feature(doc).Name
+    doc.ClearSelection2(True)
+    for e in edges:
+        ref = g.resolve(doc, e)
+        if ref.kind != "edge":
+            raise SwError(f"{e} is not an edge.")
+        ref.select(doc)
+    pos = C.swHemPositionTypeOutside if outside else C.swHemPositionTypeInside
+    f = doc.FeatureManager.InsertSheetMetalHem2(getattr(C, _HEMS[kind]), pos, reverse, mm(length), mm(gap), rad(angle), mm(radius), 0.0, None,
+                                                True, 0, 0, False, 0.5, 0.0, 0.0)
+    if f is None:
+        doc.ClearSelection2(True)
+        raise SwError("SolidWorks could not add the hem; use straight edges on the sheet's outline.")
+    out = result(doc, f, "hem")
+    if out["feature"] == before:
+        raise SwError("SolidWorks did not add the hem.")
+    out["edges"] = len(edges)
+    return out
+
+
+@tool(WRITES)
+def sketched_bend(
+    fixed: Annotated[list[float], Field(description="A point [x, y, z] in mm on the part of the sheet that stays in place.")],
+    angle: Annotated[float, Field(gt=0, lt=180, description="Bend angle in degrees.")] = 90.0,
+    sketch: Annotated[str | None, Field(description="Sketch on a sheet face holding the bend line(s); default is the latest sketch.")] = None,
+    position: Annotated[Literal["centerline", "material_inside", "material_outside", "bend_outside"], Field(description="Where the bend sits relative to the line.")] = "centerline",
+    radius: Annotated[float | None, Field(description="Inside bend radius in mm; default is the part's.")] = None,
+    reverse: Annotated[bool, Field(description="Bend to the other side of the sheet.")] = False,
+) -> dict:
+    """Bend a sheet metal part along sketched lines (clips, brackets and tabs bent out of a flat blank)."""
+    doc = SW.active("part")
+    C = SW.C
+    _sheet_metal_feature(doc)
+    p = [mm(c) for c in fixed]
+    face = g.resolve(doc, "face@{},{},{}".format(*fixed)).obj
+    name = _select_sketch(doc, sketch)
+    # the fixed side comes from where the face is picked, so select it at the point like a mouse click
+    doc.Extension.SelectByID2("", "FACE", p[0], p[1], p[2], True, 0, None, 0)
+    sel = SW.cast(doc.SelectionManager, "ISelectionMgr")
+    picked = sel.GetSelectedObject6(sel.GetSelectedObjectCount2(-1), -1)
+    if picked is None or SW.app.IsSame(picked, face) != 1:
+        doc.ClearSelection2(True)
+        raise SwError(f"Could not pick the face at {fixed}; give a point further from edges and holes.")
+    data = SW.cast(doc.FeatureManager.CreateDefinition(C.swFmSketchBend), "ISketchedBendFeatureData")
+    data.BendAngle = rad(angle)
+    data.ReverseDirection = reverse
+    data.PositionType = {"centerline": C.swFlangePositionTypeBendCenterLine, "material_inside": C.swFlangePositionTypeMaterialInside,
+                         "material_outside": C.swFlangePositionTypeMaterialOutside, "bend_outside": C.swFlangePositionTypeBendOutside}[position]
+    if radius:
+        data.UseDefaultBendRadius = False
+        data.BendRadius = mm(radius)
+    data.SetFixedFace(p[0], p[1], p[2], face)
+    f = doc.FeatureManager.CreateFeature(data)
+    out = result(doc, f, "sketched bend", f"{name} needs straight lines on a flat face of the sheet.")
+    out["angle"] = angle
+    return out

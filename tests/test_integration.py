@@ -523,6 +523,78 @@ def test_gdt_and_fillets(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_hems_bends_splits_and_surfaces(tmp_path: Path):
+    """Hems and sketched bends on sheet metal, body splits by planes and surfaces, and surface features."""
+
+    async def body(c: Session):
+        async def plate():
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-50, -30], "corner2": [50, 30]}])
+            await c.call("finish_sketch")
+            await c.call("sheet_metal_base", thickness=1.0, bend_radius=1.0)
+
+        try:
+            await plate()
+            h = await c.call("hem", edges=["edge@0,0,30"], kind="closed", length=6)
+            assert h["volume_mm3"] > 6000
+            assert (await c.call("flat_pattern"))["bends"] == 1
+            await c.call("close_document")
+            for fixed, left_moves in (([-20, 0, 0], False), ([30, 0, 0], True)):
+                await plate()
+                await c.call("start_sketch", on="face@0,0,0")
+                await c.call("sketch", coords="model", entities=[{"type": "line", "from": [10, 0, -30], "to": [10, 0, 30]}])
+                await c.call("finish_sketch")
+                await c.call("sketched_bend", fixed=fixed, angle=90)
+                min_x = (await c.call("bounding_box"))["min"][0]
+                assert (min_x > 5) if left_moves else min_x == pytest.approx(-50)  # the side holding the fixed point stays put
+                await c.call("close_document")
+
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-40, -25], "corner2": [40, 25]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=20)
+            await c.call("ref_plane", mode="offset", refs=["plane:Right"], distance=10)
+            halves = await c.call("split_body", tools=["plane:Plane1"])
+            assert len(halves["bodies"]) == 2
+            sizes = sorted(b["volume_mm3"] for b in (await c.call("list_bodies"))["bodies"])
+            assert sizes == pytest.approx([30 * 50 * 20, 50 * 50 * 20])
+            small = min((await c.call("list_bodies"))["bodies"], key=lambda b: b["volume_mm3"])["name"]
+            assert (await c.call("delete_body", bodies=[f"body:{small}"]))["volume_mm3"] == pytest.approx(50 * 50 * 20)
+            # a sloped surface through the rest splits it in two equal halves
+            await c.call("ref_plane", mode="offset", refs=["plane:Front"], distance=30)
+            await c.call("start_sketch", on="plane:Plane2")
+            await c.call("sketch", entities=[{"type": "line", "from": [-50, 5], "to": [50, 15]}])
+            await c.call("finish_sketch")
+            await c.call("surface", kind="extrude", depth=60, reverse=True)
+            surf = (await c.call("list_bodies"))["surfaces"][0]["name"]
+            cut = await c.call("split_body", tools=[f"body:{surf}"])
+            assert len(cut["bodies"]) == 2
+            assert "pass right through" in await c.fails("split_body", tools=["plane:Top"])
+            await c.call("close_document")
+
+            await c.call("new_document", kind="part")
+            await c.call("ref_plane", mode="offset", refs=["plane:Front"], distance=200)
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "airfoil", "naca": "2412", "chord": 100, "origin": [-25, 0]}])
+            await c.call("finish_sketch")
+            await c.call("start_sketch", on="plane:Plane1")
+            await c.call("sketch", entities=[{"type": "airfoil", "naca": "2412", "chord": 60, "origin": [-15, 0]}])
+            await c.call("finish_sketch")
+            skin = await c.call("surface", kind="loft", profiles=["Sketch1", "Sketch2"])
+            assert skin["type"] == "BlendRefSurface"
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-30, -30], "corner2": [30, 30]}])
+            await c.call("finish_sketch")
+            assert (await c.call("surface", kind="planar"))["type"] == "PlanarSurface"
+            assert len((await c.call("list_bodies"))["surfaces"]) == 2
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

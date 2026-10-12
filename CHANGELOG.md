@@ -40,6 +40,11 @@ All notable changes to this project are documented here. The format follows
   Drawings import datum targets.
 - `fillet` takes `kind`: variable radius along an edge, face fillets between two face sets, and full round
   fillets, each checked to have changed the part.
+- Sheet metal `hem` (closed, open, teardrop, rolled, double) and `sketched_bend` (bend along sketched lines,
+  with the fixed side chosen by a point).
+- `split_body` (by planes, faces, sketches or surface bodies; refuses tools that do not cut), `delete_body`
+  (delete or keep bodies) and `surface` (extruded, revolved, lofted, planar and offset surface bodies, listed
+  by `list_bodies` and usable as `body:Name` split tools).
 - `design_guide('sheet_metal')`: bend radii for 5052, 6061, 2024 and 7075 aluminium, stainless and
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 

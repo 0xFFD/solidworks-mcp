@@ -98,6 +98,13 @@ class Placement:
         return [sum(q[j] * self.R[i][j] for j in range(3)) for i in range(3)]
 
 
+def surface_bodies(doc: Any) -> list[Any]:
+    """Surface (sheet) bodies of the active part."""
+    if doc_kind(doc) != "part":
+        return []
+    return SW.cast_all(SW.part(doc).GetBodies2(1, True), "IBody2")
+
+
 def placement(doc: Any, component: str | None) -> Placement | None:
     return Placement(find_component(doc, component)) if component else None
 
@@ -311,9 +318,10 @@ def resolve(doc: Any, ref: str) -> Ref:
     if prefix == "comp":
         return Ref(find_component(doc, name), "component", ref)
     if prefix == "body":
-        found = [b for b in bodies(doc) if b.Name == name]
+        everything = bodies(doc) + surface_bodies(doc)
+        found = [b for b in everything if b.Name == name]
         if not found:
-            raise SwError(f"No solid body named '{name}'. Bodies: {[b.Name for b in bodies(doc)]}")
+            raise SwError(f"No body named '{name}'. Bodies: {[b.Name for b in everything]}")
         return Ref(found[0], "body", ref)
     if prefix == "plane" and name.lower() in _DEFAULT_PLANES:
         return Ref(default_plane(doc, name.lower()), "feature", ref)

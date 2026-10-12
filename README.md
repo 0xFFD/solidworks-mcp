@@ -41,8 +41,8 @@ The existing servers cover a few sketch and extrude calls, are written against o
 
 | | solidworks-mcp |
 |---|---|
-| Modelling | 2D and 3D sketches with exact coordinates in sketch or model space, sketch editing (trim, offset, convert edges, relations, driving dimensions, move, rotate, copy, delete), extrude, revolve, sweep (including round sections along a path), helices and spirals for springs and modelled threads, loft, fillets (constant, variable radius, face and full round), chamfer, shell, draft, linear and circular patterns of features or bodies, mirror, multibody combine and move/copy, reference planes and axes |
-| Sheet metal | Base flanges from closed outlines or open L, U, Z and hat profiles, edge flanges at any angle with their own bend radius and K-factor, flat pattern size and bend count, flatten and fold, flat-pattern DXF/DWG export with bend lines (blocked without an export-control marking when required) |
+| Modelling | 2D and 3D sketches with exact coordinates in sketch or model space, sketch editing (trim, offset, convert edges, relations, driving dimensions, move, rotate, copy, delete), extrude, revolve, sweep (including round sections along a path), helices and spirals for springs and modelled threads, loft, fillets (constant, variable radius, face and full round), chamfer, shell, draft, linear and circular patterns of features or bodies, mirror, multibody combine, split, delete and move/copy, surface bodies (extruded, revolved, lofted, planar, offset) as split tools and reference geometry, reference planes and axes |
+| Sheet metal | Base flanges from closed outlines or open L, U, Z and hat profiles, edge flanges at any angle with their own bend radius and K-factor, hems (closed, open, teardrop, rolled, double), sketched bends with a chosen fixed side, flat pattern size and bend count, flatten and fold, flat-pattern DXF/DWG export with bend lines (blocked without an export-control marking when required) |
 | Holes | Hole Wizard plain, counterbore, countersink (including 100 degree aerospace countersinks) and tapped holes from ISO, ANSI metric and ANSI inch tables, with every centre placed exactly where you ask |
 | GD&T and MBD | Datums, datum targets (points, circular and rectangular areas), feature control frames (all 14 characteristics, diameter zones, MMC and LMC on tolerances and datums, composite position and profile frames, projected tolerance zones), surface finish symbols and cosmetic threads on parts or assembly components, carried into drawings and STEP |
 | Drawings | Standard three views plus isometric in first or third angle projection, model dimensions, hole callouts and GD&T imported, section, detail, projected and auxiliary views, any model view or sheet metal flat pattern view on further sheets, reference dimensions between model edges, bills of materials with balloons, revision blocks with revision rows, hole tables, notes, PDF and DWG export. Drawings take the part's units and drafting standard |
@@ -108,8 +108,8 @@ All lengths are millimetres and all angles degrees, in both directions, whatever
 | Session and files | `sw_info`, `new_document`, `open_document`, `import_file` (STEP, IGES, Parasolid, ACIS, STL, 3MF), `activate_document`, `save_document`, `export`, `close_document`, `document_settings` |
 | Sketching | `start_sketch` (on a plane or face, or a 3D sketch), `edit_sketch`, `sketch` (line, centerline, polyline with corner radii, rectangle, center rectangle, rounded rectangle, circle, bolt circle, circle grid, arc, ellipse, polygon, slot, point, spline, NACA airfoil, engraved text in any font, construction geometry, mirrored copies), `list_sketch`, `modify_sketch` (trim, offset, convert model edges, sketch fillet and chamfer, relations, driving dimensions, move, rotate, copy, delete, construction), `finish_sketch` (optionally fully defined with dimensions) |
 | Features | `extrude`, `revolve`, `sweep`, `helix`, `loft`, `fillet`, `chamfer`, `shell`, `draft`, `hole`, `cosmetic_thread`, `linear_pattern`, `circular_pattern`, `mirror`, `ref_plane`, `ref_axis` |
-| Multibody | `list_bodies`, `combine` (add, subtract, common), `move_body` (move, rotate, copy) |
-| Sheet metal | `sheet_metal_base`, `edge_flange`, `flat_pattern` (info, flatten, fold, DXF/DWG export) |
+| Multibody and surfaces | `list_bodies`, `combine` (add, subtract, common), `move_body` (move, rotate, copy), `split_body` (by planes, faces, sketches or surfaces), `delete_body`, `surface` (extrude, revolve, loft, planar, offset) |
+| Sheet metal | `sheet_metal_base`, `edge_flange`, `hem`, `sketched_bend`, `flat_pattern` (info, flatten, fold, DXF/DWG export) |
 | Model tree and edits | `list_features`, `dimensions`, `set_dimensions`, `edit_feature` (end conditions, depths, directions, radii, thickness, pattern counts), `configurations`, `equations`, `feature_action` (suppress, unsuppress, delete; per configuration), `undo`, `rebuild` |
 | Geometry and checks | `list_faces`, `list_edges`, `measure`, `mass_properties`, `bounding_box`, `check_geometry`, `screenshot` |
 | Engineering data | `list_materials`, `set_material`, `custom_properties` |
@@ -117,7 +117,7 @@ All lengths are millimetres and all angles degrees, in both directions, whatever
 | Drawings | `create_drawing`, `drawing_views`, `section_view`, `detail_view`, `projected_view`, `auxiliary_view`, `add_view` (model or flat pattern), `sheets`, `drawing_dimension`, `drawing_table` (BOM with balloons, revision block, hole table) |
 | Assemblies | `insert_component`, `list_components`, `add_mate` (including limit, width, symmetric and gear mates), `exploded_view`, `interference_check`, `bom` (parts list with mass budget) |
 
-78 tools and one prompt (`design`) in total. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`) so clients can approve reads automatically and ask before deleting or closing.
+83 tools and one prompt (`design`) in total. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`) so clients can approve reads automatically and ask before deleting or closing.
 
 ### Picking faces and edges
 
@@ -165,7 +165,7 @@ Copy the log to write-once storage if you need it to survive a determined admini
 
 **Read-only mode.** `--read-only` allows only the tools that do not change models or files, for design reviews and audits.
 
-**No code execution.** There is no tool that runs macros, scripts or arbitrary API calls. Everything the agent can do is one of the 78 tools above.
+**No code execution.** There is no tool that runs macros, scripts or arbitrary API calls. Everything the agent can do is one of the 83 tools above.
 
 **Engineering standards.** `document_settings` switches between ASME Y14.5 and ISO drafting standards, `create_drawing` supports third and first angle projection, GD&T is applied to model faces (model-based definition), holes come from the standard Hole Wizard tables rather than hand-drawn circles, `finish_sketch(fully_define=true)` produces fully defined sketches, and `check_geometry` runs the SolidWorks body check before release.
 
@@ -175,11 +175,11 @@ Copy the log to write-once storage if you need it to survive a determined admini
 
 The tools cover the common path from a blank part to a released drawing. Plenty of SolidWorks is not exposed yet, and an agent cannot do the following:
 
-- **Other modelling environments.** Weldments, surface modelling, mould tools and routing are not available. 3D sketches hold lines, splines and points only (no 3D arcs or relations).
-- **Sheet metal beyond flanges.** Base and edge flanges, flat patterns and DXF blanks work. Hems, jogs, miter flanges, sketched bends, closed corners, forming tools, gauge tables and converting a solid to sheet metal are not available. Base-flange bends use the SolidWorks default K-factor (0.5); only edge flanges take their own.
+- **Other modelling environments.** Weldments, mould tools and routing are not available. Surfaces can be created and used to split bodies, but not knitted, trimmed, filled or thickened. 3D sketches hold lines, splines and points only (no 3D arcs or relations).
+- **Sheet metal beyond flanges.** Base and edge flanges, hems, sketched bends, flat patterns and DXF blanks work. Jogs, miter flanges, closed corners, forming tools, gauge tables and converting a solid to sheet metal are not available. Base-flange bends use the SolidWorks default K-factor (0.5); only edge flanges take their own.
 - **Editing what already exists.** `edit_feature` redefines extrudes, cuts, revolves, fillets, chamfers, shells and patterns. Sweeps, lofts, drafts, Hole Wizard holes and reference geometry still have to be deleted and built again to change anything other than their dimensions.
 - **Detailed sketch work.** There is no extend, split, sketch pattern, sketch block or spline editing. Engraved text is placed one character at a time.
-- **Advanced features.** Fillets can be constant, variable (linear between the two ends of one edge), face or full round, but not setback, conic or asymmetric. There are no sketch, curve or table driven patterns. Holes go on planar faces, one face per call. Bodies can be combined, moved and copied, but not split.
+- **Advanced features.** Fillets can be constant, variable (linear between the two ends of one edge), face or full round, but not setback, conic or asymmetric. There are no sketch, curve or table driven patterns. Holes go on planar faces, one face per call. Bodies can be combined, split, moved, copied and deleted.
 - **Design tables.** Equations, global variables and configurations work, but there are no Excel design tables, and custom properties and materials apply to the whole part rather than per configuration.
 - **Imported geometry.** `import_file` brings STEP, IGES and Parasolid models in as dumb solids: there is no feature recognition, so imported parts can be referenced, measured and mated but not edited by dimension.
 - **Design judgement.** The guide gives rules of thumb and a worked recipe, not analysis. Strength, vibration, thermal and airworthiness decisions stay with engineers.

@@ -10,7 +10,7 @@ from pydantic import Field
 from . import geometry as g
 from .com import SW, const_name, mm, rad, to_mm
 from .errors import SwError
-from .registry import WRITES, tool
+from .registry import DESTRUCTIVE, WRITES, tool
 from .tools_sketch import SketchFrame, _doubles, last_sketch
 
 END = {"blind": "swEndCondBlind", "through_all": "swEndCondThroughAll", "through_all_both": "swEndCondThroughAllBoth",
@@ -747,6 +747,117 @@ def move_body(
     f = doc.FeatureManager.InsertMoveCopyBody2(*t, 0.0, *c, *r, copy, count if copy else 1)
     out = result(doc, f, "move/copy body")
     out["bodies"] = [b.Name for b in g.bodies(doc)]
+    return out
+
+
+@tool(WRITES)
+def split_body(
+    tools: Annotated[list[str], Field(description="Cutting planes, faces, sketches or surface bodies ('plane:Plane1', 'face@x,y,z', 'sketch:Sketch3', 'body:Surface-Extrude1').")],
+) -> dict:
+    """Split the part's solid bodies with planes, faces or sketches into separate bodies (machining blanks,
+    sections of a long part, master-model splits). The new bodies keep their volumes and can be combined,
+    moved, patterned or deleted with the other body tools."""
+    import pythoncom
+    from win32com.client import VARIANT
+
+    doc = SW.active("part")
+    fm = doc.FeatureManager
+    doc.ClearSelection2(True)
+    for t in tools:
+        g.select(doc, t if ":" in t or "@" in t else f"feature:{t}")
+    existing = len(g.bodies(doc))
+    pieces = fm.PreSplitBody2()  # every resulting body, the untouched ones included
+    solid_pieces = [b for b in SW.cast_all(pieces, "IBody2") if b.GetType() == SW.C.swSolidBody]
+    if len(solid_pieces) <= existing:
+        doc.ClearSelection2(True)
+        raise SwError("The tools do not cut any body into pieces; they must pass right through it.")
+    bs = SW.cast_all(pieces, "IBody2")
+    f = fm.PostSplitBody2(_dispatch_array(bs), False, VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_DISPATCH, [None] * len(bs)),
+                          VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_BSTR, [""] * len(bs)), "")
+    out = result(doc, f, "split")
+    out["bodies"] = [b.Name for b in g.bodies(doc)]
+    return out
+
+
+@tool(DESTRUCTIVE)
+def delete_body(
+    bodies: Annotated[list[str], Field(description="Bodies ('body:Name').")],
+    keep: Annotated[bool, Field(description="Keep these bodies and delete all the others instead.")] = False,
+) -> dict:
+    """Delete solid bodies from a multibody part, or keep only the given ones (as a feature, so it can be
+    suppressed or deleted later)."""
+    doc = SW.active("part")
+    doc.ClearSelection2(True)
+    for b in bodies:
+        g.Ref(_body(doc, b), "body", b).select(doc)
+    f = doc.FeatureManager.InsertDeleteBody2(keep)
+    out = result(doc, f, "body delete")
+    out["bodies"] = [b.Name for b in g.bodies(doc)]
+    return out
+
+
+# ------------------------------------------------------------------------------------------ surfaces
+
+
+def _surfaces(doc: Any) -> list[str]:
+    return [b.Name for b in g.surface_bodies(doc)]
+
+
+@tool(WRITES)
+def surface(
+    kind: Annotated[Literal["extrude", "revolve", "loft", "planar", "offset"], Field(description=(
+        "extrude: a sketch (open or closed) pulled into a surface; revolve: a sketch about its centerline or axis; "
+        "loft: through two or more profile sketches (skins, fairings); planar: fill a closed sketch; offset: copy faces at a distance."))],
+    sketch: Annotated[str | None, Field(description="extrude, revolve, planar: the sketch; default is the latest sketch.")] = None,
+    profiles: Annotated[list[str] | None, Field(description="loft: profile sketches in order.")] = None,
+    faces: Annotated[list[str] | None, Field(description="offset: the faces to offset.")] = None,
+    depth: Annotated[float, Field(description="extrude: depth in mm.")] = 10.0,
+    angle: Annotated[float, Field(description="revolve: angle in degrees.")] = 360.0,
+    axis: Annotated[str | None, Field(description="revolve: axis reference when the sketch has no centerline.")] = None,
+    distance: Annotated[float, Field(description="offset: distance in mm (0 copies the faces).")] = 0.0,
+    reverse: bool = False,
+    closed: Annotated[bool, Field(description="loft: close the loft back to the first profile.")] = False,
+) -> dict:
+    """Surface bodies: cutting and splitting tools (split_body(tools=['body:Surface-Extrude1'])), parting
+    faces, and reference geometry for aerodynamic skins and fairings. list_bodies lists them."""
+    doc = SW.active("part")
+    C = SW.C
+    fm = doc.FeatureManager
+    before = _last_feature(doc).Name
+    n0 = len(_surfaces(doc))
+    if kind in ("extrude", "revolve", "planar"):
+        name = _select_sketch(doc, sketch)
+        if kind == "extrude":
+            fm.FeatureExtruRefSurface3(True, reverse, 0, 0.0, C.swEndCondBlind, C.swEndCondBlind, mm(depth), 0.0, False, False, False, False,
+                                       0.0, 0.0, False, False, False, False, False, False, False, False)
+        elif kind == "revolve":
+            if axis:
+                g.select(doc, axis, mark=4)
+            fm.InsertRevolvedRefSurface(rad(angle), reverse, 0.0, 0)
+        else:
+            doc.InsertPlanarRefSurface()
+        hint = f"Check {name}" + (" (a planar surface needs one closed outline)." if kind == "planar" else ".")
+    elif kind == "loft":
+        if not profiles or len(profiles) < 2:
+            raise SwError("A loft surface needs at least two profiles.")
+        doc.ClearSelection2(True)
+        for p in profiles:
+            g.select(doc, p if ":" in p else f"sketch:{p}", mark=1)
+        doc.InsertLoftRefSurface2(closed, True, False, 1.0, 0, 0)
+        hint = "Profiles should not cross each other."
+    else:
+        if not faces:
+            raise SwError("An offset surface needs faces.")
+        doc.ClearSelection2(True)
+        for f in faces:
+            g.select(doc, f)
+        doc.InsertOffsetSurface(mm(distance), reverse)
+        hint = "The offset may be larger than the smallest radius of curvature."
+    out = created_since(doc, before, f"{kind} surface", hint)
+    out.pop("volume_mm3", None)
+    out["surfaces"] = _surfaces(doc)
+    if len(out["surfaces"]) <= n0:
+        out["note"] = "No new surface body was reported; the surface may have joined an existing one."
     return out
 
 

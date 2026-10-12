@@ -37,9 +37,10 @@ Typical part workflow:
 3. Features use the latest sketch unless one is named: extrude (boss or cut), revolve, sweep, loft, then
    fillet, chamfer, shell, hole (Hole Wizard: plain, counterbore, countersink, tapped, at exact
    positions), draft, linear_pattern, circular_pattern, mirror, ref_plane, ref_axis, cosmetic_thread,
-   helix (springs, modelled threads). Multibody: list_bodies, combine, move_body, 'body:Name' references.
+   helix (springs, modelled threads). Multibody: list_bodies, combine, move_body, split_body, delete_body,
+   surface (surface bodies as split tools), 'body:Name' references.
    edit_feature changes an existing feature's end condition, depth, radius, thickness or pattern count.
-   Sheet metal: sheet_metal_base (closed outline or open profile), edge_flange, flat_pattern (blank size,
+   Sheet metal: sheet_metal_base (closed outline or open profile), edge_flange, hem, sketched_bend, flat_pattern (blank size,
    flatten, DXF export); design_guide('sheet_metal') has bend radii and a tray recipe.
 4. Pick faces and edges with list_faces / list_edges (indices change after every feature) or by point:
    "face@x,y,z", "edge@x,y,z". Planes: "plane:Front|Top|Right" or any plane name.

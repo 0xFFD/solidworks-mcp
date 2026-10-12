@@ -125,16 +125,24 @@ def list_edges(
 
 @tool(READ_ONLY)
 def list_bodies() -> dict:
-    """Solid bodies of the active part with volume and bounding box, named for 'body:Name' references
-    (combine, move_body, patterns and mirror)."""
+    """Solid and surface bodies of the active part with volume (or area) and bounding box, named for
+    'body:Name' references (combine, move_body, split_body, delete_body, patterns, mirror)."""
     doc = SW.active("part")
-    rows = []
+    rows, surfaces = [], []
     for b in g.bodies(doc):
         mp = b.GetMassProperties(1.0)
         box = list(b.GetBodyBox())
         rows.append({"name": b.Name, "volume_mm3": round(mp[3] * 1e9, 3), "faces": b.GetFaceCount(),
                      "box_min": [round(to_mm(v), 3) + 0.0 for v in box[:3]], "box_max": [round(to_mm(v), 3) + 0.0 for v in box[3:6]]})
-    return {"reference": "body:<name>", "count": len(rows), "bodies": rows}
+    for b in g.surface_bodies(doc):
+        box = list(b.GetBodyBox())
+        area = sum(f.GetArea() for f in SW.cast_all(b.GetFaces(), "IFace2"))
+        surfaces.append({"name": b.Name, "area_mm2": round(area * 1e6, 3), "faces": b.GetFaceCount(),
+                         "box_min": [round(to_mm(v), 3) + 0.0 for v in box[:3]], "box_max": [round(to_mm(v), 3) + 0.0 for v in box[3:6]]})
+    out: dict[str, Any] = {"reference": "body:<name>", "count": len(rows), "bodies": rows}
+    if surfaces:
+        out["surfaces"] = surfaces
+    return out
 
 
 def _dims_of(f: Any) -> list[dict]:
