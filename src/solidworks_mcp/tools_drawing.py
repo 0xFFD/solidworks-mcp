@@ -496,11 +496,12 @@ def section_view(
     flip: Annotated[bool, Field(description="Look in the opposite direction.")] = False,
     points: Annotated[list[list[float]] | None, Field(description=(
         "Cutting path with corners as model points [[x, y, z], ...] in mm, for half sections (e.g. from beyond the part "
-        "along the axis to the centre, then out through the side) and offset sections through features that do not line up. "
+        "along the axis to the centre, then out through the side), offset sections through features that do not line up, and "
+        "aligned sections (a leg at an angle, e.g. from the rim to the centre and out through a bolt-circle hole). "
         "The path should start and end outside the part. Overrides direction and offset."))] = None,
 ) -> dict:
-    """Section view through a drawing view: a straight full section, or a half or offset section along a
-    path with corners; placed beside the parent view."""
+    """Section view through a drawing view: a straight full section, or a half, offset or aligned section
+    along a path with corners; placed beside the parent view."""
     doc = SW.active("drawing")
     drw = SW.drawing(doc)
     C = SW.C

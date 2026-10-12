@@ -416,6 +416,8 @@ def test_drawing_details(tmp_path: Path):
             assert section["cut_faces"] > 0 and "warning" not in section  # the cut goes through the counterbores
             stepped = await c.call("section_view", view=top, label="C", points=[[-50, 10, 15], [-10, 10, 15], [-10, 10, -15], [50, 10, -15]])
             assert stepped["cut_faces"] > section["cut_faces"]  # through two holes that do not line up
+            aligned = await c.call("section_view", view=top, label="E", points=[[0, 10, -40], [0, 10, 0], [30, 10, 15], [45, 10, 22.5]])
+            assert aligned["cut_faces"] > 0  # a leg at an angle through a counterbore
             assert (await c.call("detail_view", view=front, center=[30, 10, 15], radius=8, scale="3:1", label="D"))["scale"] == 3
             assert (await c.call("breakout_section", view=front, center=[-30, 5, 15], radius=7, depth=15))["cut_faces"] > 0
             right = await c.call("projected_view", view=front, direction="right")

@@ -31,7 +31,7 @@ All notable changes to this project are documented here. The format follows
   model view or a sheet metal flat pattern with bend lines and notes), `sheets` (add and activate sheets),
   `drawing_dimension` (reference dimensions between model edges in a view) and `drawing_table` (bill of
   materials with balloons, revision block with revision rows, hole table with tags and callouts).
-  `section_view` takes `points` for half and offset sections along a cutting path with corners.
+  `section_view` takes `points` for half, offset and aligned sections along a cutting path with corners.
   `view_dimensions` lists the dimensions of a view with values and positions and moves them.
   `broken_view` shortens long parts between two model points, and `breakout_section` cuts away a circular
   region of a view to a depth to show bores and pockets.
