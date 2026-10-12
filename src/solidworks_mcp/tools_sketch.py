@@ -746,6 +746,34 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
         by = op.get("by") or [0, 0]
         _select_items(doc, sk, items)
         doc.Extension.MoveOrCopy(kind == "copy", int(op.get("count", 1)), bool(op.get("keep_relations", False)), 0, 0, 0, mm(by[0]), mm(by[1]), 0)
+    elif kind == "set_point":
+        to = op.get("to")
+        if len(items) != 1 or not to or len(to) not in (2, 3):
+            raise SwError("set_point needs one point (items:['pt@x,y']) and to:[x, y] (or [x, y, z] in a 3D sketch).")
+        pt = SW.cast(_sketch_item(sk, items[0]), "ISketchPoint")
+        q = [mm(c) for c in to] + [0.0] * (3 - len(to))
+        sm.AddToDB = True
+        try:
+            ok = pt.SetCoords(*q)
+        finally:
+            sm.AddToDB = False
+        got = [pt.X, pt.Y, pt.Z]
+        if not ok or math.dist(got, q) > 1e-7:
+            raise SwError(f"SolidWorks could not put the point at {to}; relations or dimensions may hold it (it is at {[round(to_mm(c), 4) for c in got]}).")
+    elif kind == "spline_insert":
+        at = op.get("at")
+        if len(items) != 1 or not at:
+            raise SwError("spline_insert needs one spline (items:['seg@x,y']) and at:[x, y], a point on or near it.")
+        seg = SW.cast(_sketch_item(sk, items[0]), "ISketchSegment")
+        if seg.GetType() != C.swSketchSPLINE:
+            raise SwError(f"{items[0]} is not a spline.")
+        sp = SW.cast(seg, "ISketchSpline")
+        count = sp.GetPointCount()
+        q = [mm(c) for c in at] + [0.0] * (3 - len(at))
+        on = list(SW.cast(seg.GetCurve(), "ICurve").GetClosestPointOn(*q))[:3]
+        if not sp.InsertPoint(*on) or sp.GetPointCount() != count + 1:
+            raise SwError(f"SolidWorks could not insert a spline point near {at}.")
+        out["inserted"] = [round(to_mm(c), 4) for c in on[:len(at)]]
     elif kind == "rotate":
         c = op.get("center") or [0, 0]
         _select_items(doc, sk, items)
@@ -851,7 +879,7 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
     elif kind == "dimension":
         out.update(_dimension(doc, sk, op, items, to_model))
     else:
-        raise SwError(f"Unknown sketch operation '{kind}'. Use delete, move, copy, rotate, trim, extend, split, pattern, offset, convert, fillet, chamfer, "
+        raise SwError(f"Unknown sketch operation '{kind}'. Use delete, move, copy, rotate, set_point, spline_insert, trim, extend, split, pattern, offset, convert, fillet, chamfer, "
                       "construction, relation or dimension.")
     doc.ClearSelection2(True)
     change = len(_segments(sk)) - n
@@ -878,6 +906,8 @@ def modify_sketch(
         "{op:'offset', items (sketch segments or model edges/faces), distance (mm; the sign picks the side), both_sides, chain}, "
         "{op:'convert', refs:['edge@x,y,z' | 'face:N', ...]} (project model edges into the sketch), "
         "{op:'fillet', items:['pt@x,y'], radius}, {op:'chamfer', items:['pt@x,y'], distance}, "
+        "{op:'set_point', items:['pt@x,y'], to:[x, y]} (put a point at exact coordinates; a spline fit point reshapes the spline "
+        "through it), {op:'spline_insert', items:['seg@x,y'], at:[x, y]} (add a fit point on a spline), "
         "{op:'construction', items, on}, "
         "{op:'relation', type, items} (types: " + ", ".join(RELATIONS) + "), "
         "{op:'dimension', items, value, orientation:'aligned'|'horizontal'|'vertical', at:[x, y]} "

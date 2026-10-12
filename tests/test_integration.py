@@ -1002,6 +1002,25 @@ def test_weldment_trim_extend(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_spline_editing(tmp_path: Path):
+    """Reshape a spline by moving a fit point exactly and adding one."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Right")
+            await c.call("sketch", entities=[{"type": "spline", "points": [[0, 0], [20, 10], [40, 5], [60, 15]]}])
+            await c.call("modify_sketch", operations=[{"op": "set_point", "items": ["pt@20,10"], "to": [20, 25]}])
+            ins = await c.call("modify_sketch", operations=[{"op": "spline_insert", "items": ["seg@40,5"], "at": [50, 10]}])
+            added = ins["done"][0]["inserted"]
+            pts = sorted(tuple(p["at"]) for p in (await c.call("list_sketch"))["points"])
+            assert (20.0, 25.0) in pts and tuple(added) in pts and len(pts) == 5
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")
