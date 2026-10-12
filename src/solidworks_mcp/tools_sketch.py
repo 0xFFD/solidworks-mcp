@@ -760,6 +760,24 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
         got = [pt.X, pt.Y, pt.Z]
         if not ok or math.dist(got, q) > 1e-7:
             raise SwError(f"SolidWorks could not put the point at {to}; relations or dimensions may hold it (it is at {[round(to_mm(c), 4) for c in got]}).")
+    elif kind == "insert_block":
+        file, at = op.get("file"), op.get("at") or [0, 0]
+        if not file:
+            raise SwError("insert_block needs file (a .sldblk block file) and at:[x, y].")
+        path = app().path(file, must_exist=True, suffixes=(".sldblk",))
+        mu = SW.cast(SW.app.GetMathUtility(), "IMathUtility")
+        where = mu.CreatePoint(_doubles([mm(at[0]), mm(at[1]), 0.0]))
+        scale, ang = float(op.get("scale", 1.0)), math.radians(float(op.get("angle", 0)))
+        # a block file already in the document is placed again from its definition (a second load fails)
+        defn = next((d for d in SW.cast_all(sm.GetSketchBlockDefinitions() or [], "ISketchBlockDefinition")
+                     if (d.FileName or "").lower() == str(path).lower()), None)
+        if defn is not None:
+            inst = sm.InsertSketchBlockInstance(defn, where, scale, ang)
+        else:
+            inst = sm.MakeSketchBlockFromFile(where, str(path), bool(op.get("linked", False)), scale, ang)
+        if inst is None:
+            raise SwError(f"SolidWorks could not insert the block {path.name}.")
+        out["block"] = path.name
     elif kind == "spline_tangent":
         at, angle = op.get("at"), op.get("angle")
         if len(items) != 1 or not at or angle is None:
@@ -941,7 +959,7 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
     elif kind == "dimension":
         out.update(_dimension(doc, sk, op, items, to_model))
     else:
-        raise SwError(f"Unknown sketch operation '{kind}'. Use delete, move, copy, rotate, block, set_point, spline_insert, spline_tangent, picture, trim, extend, split, pattern, offset, convert, fillet, chamfer, "
+        raise SwError(f"Unknown sketch operation '{kind}'. Use delete, move, copy, rotate, block, insert_block, set_point, spline_insert, spline_tangent, picture, trim, extend, split, pattern, offset, convert, fillet, chamfer, "
                       "construction, relation or dimension.")
     doc.ClearSelection2(True)
     change = len(_segments(sk)) - n
@@ -970,6 +988,7 @@ def modify_sketch(
         "{op:'fillet', items:['pt@x,y'], radius}, {op:'chamfer', items:['pt@x,y'], distance}, "
         "{op:'block', items, base:[x, y], copies:[[x, y], ...], angle, save_as:'name.sldblk'} (make a sketch block and place copies "
         "with their base point at each point, rotated by angle; optionally save it as a block file), "
+        "{op:'insert_block', file:'name.sldblk', at:[x, y], angle, scale, linked} (place a saved block), "
         "{op:'spline_tangent', items:['seg@x,y'], at:[x, y] (a fit point), angle (deg from sketch x), weight}, "
         "{op:'picture', file, at:[x, y] (lower-left), width (mm)} (a reference image to trace, e.g. a legacy drawing), {op:'set_point', items:['pt@x,y'], to:[x, y]} (put a point at exact coordinates; a spline fit point reshapes the spline "
         "through it), {op:'spline_insert', items:['seg@x,y'], at:[x, y]} (add a fit point on a spline), "

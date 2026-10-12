@@ -1051,6 +1051,17 @@ def test_spline_editing(tmp_path: Path):
             assert (await c.call("bounding_box"))["size"] == pytest.approx([100, 5, 30])
         finally:
             await c.call("close_document")
+        # the saved block reused in another part, twice, the second turned 90 degrees
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("modify_sketch", operations=[{"op": "insert_block", "file": "cutout.sldblk", "at": [0, 0]},
+                                                      {"op": "insert_block", "file": "cutout.sldblk", "at": [60, 0], "angle": 90}])
+            await c.call("finish_sketch")
+            assert (await c.call("extrude", depth=5))["volume_mm3"] == pytest.approx(2 * (200 - math.pi * 4) * 5)
+            assert (await c.call("bounding_box"))["size"] == pytest.approx([60, 5, 20])
+        finally:
+            await c.call("close_document")
 
     run(tmp_path, body)
 
