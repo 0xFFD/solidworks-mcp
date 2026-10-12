@@ -328,3 +328,15 @@ def arrange_dimensions(dims: list[tuple], outline: tuple[float, float, float, fl
             d = pitch * (k + 1)
             out[name] = {"top": (x, y1 + d), "bottom": (x, y0 - d), "right": (x1 + d, y), "left": (x0 - d, y)}[side]
     return out
+
+
+def tolerance_stack(contributors: list[tuple[float, float, float, int]]) -> dict:
+    """One-dimensional tolerance stack of (nominal, plus, minus, direction) contributors (minus as a positive
+    magnitude, direction +1 or -1). Each contributor is centred on its mid-limit; worst case adds the half
+    tolerances, RSS (statistical) takes their root sum of squares."""
+    nominal = sum(d * n for n, _, _, d in contributors)
+    mean = sum(d * (n + (p - m) / 2) for n, p, m, d in contributors)
+    halves = [(p + m) / 2 for _, p, m, _ in contributors]
+    wc = sum(halves)
+    rss = math.sqrt(sum(h * h for h in halves))
+    return {"nominal": nominal, "mean": mean, "worst_case": (mean - wc, mean + wc), "rss": (mean - rss, mean + rss)}

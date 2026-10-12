@@ -46,7 +46,8 @@ Typical part workflow:
 4. Pick faces and edges with list_faces / list_edges (indices change after every feature) or by point:
    "face@x,y,z", "edge@x,y,z". Planes: "plane:Front|Top|Right" or any plane name.
 5. Check the result: screenshot (returns an image), list_features (rebuild errors), mass_properties,
-   bounding_box, check_geometry, measure. Fix with set_dimensions, feature_action, undo.
+   bounding_box, check_geometry, measure, tolerance_stack (worst case and RSS clearances). Fix with set_dimensions,
+   feature_action, undo.
 6. Engineering data: set_material / list_materials, custom_properties (part number, revision,
    export-control marking), equations, configurations (variants: set_dimensions and feature_action take
    configurations=[...]), document_settings (units, ASME or ISO drafting standard),

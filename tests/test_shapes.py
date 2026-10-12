@@ -179,3 +179,12 @@ def test_arrange_dimensions_squeezes_into_room():
     assert pos["a"] == (109, 25) and pos["b"] == (118, 25)  # (30 - 12) / 2 = 9 mm columns
     tight = shapes.arrange_dimensions(dims, (0, 0, 100, 50), 8, clearance=2, room={"right": 10})
     assert tight["b"] == (116, 25)  # never closer than the spacing
+
+
+def test_tolerance_stack_worst_case_and_rss():
+    # gap = housing 50 +0.1/-0 minus two parts 20 +-0.05 and 29.8 +0/-0.1
+    r = shapes.tolerance_stack([(50, 0.1, 0.0, 1), (20, 0.05, 0.05, -1), (29.8, 0.0, 0.1, -1)])
+    assert r["nominal"] == pytest.approx(0.2)
+    assert r["worst_case"] == pytest.approx((0.15, 0.45))  # tightest: 50 - 20.05 - 29.8; loosest: 50.1 - 19.95 - 29.7
+    half = math.sqrt(0.05 ** 2 + 0.05 ** 2 + 0.05 ** 2)
+    assert r["rss"] == pytest.approx((0.3 - half, 0.3 + half))

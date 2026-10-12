@@ -11,6 +11,7 @@ from mcp.server.mcpserver import Image
 from pydantic import Field
 
 from . import geometry as g
+from . import shapes
 from .com import SW, doc_kind, mm, to_deg, to_mm
 from .errors import SwError
 from .registry import DESTRUCTIVE, READ_ONLY, WRITES, app, tool
@@ -521,3 +522,57 @@ def screenshot(
         p.write_bytes(buf.getvalue())
         meta["saved"] = str(p)
     return [meta, Image(data=buf.getvalue(), format="png")]
+
+
+@tool(READ_ONLY)
+def tolerance_stack(
+    contributors: Annotated[list[dict[str, Any]], Field(min_length=1, description=(
+        "The chain, each {dimension: 'D1@Sketch1', direction: 1 | -1} (nominal and tolerance read from the model; set "
+        "tolerances with view_dimensions) or {nominal, plus, minus, direction} in mm (minus as a positive number). "
+        "direction is +1 where the dimension adds to the result and -1 where it takes away."))],
+    requirement: Annotated[dict[str, float] | None, Field(description="Allowed result {min, max} in mm (e.g. a clearance), to check against.")] = None,
+) -> dict:
+    """One-dimensional tolerance stack-up of a dimension chain: worst case and RSS (statistical) limits of the
+    result, such as a clearance, gap or fastener grip, checked against the requirement."""
+    doc = SW.active()
+    C = SW.C
+    if doc_kind(doc) == "drawing":  # read the dimensions from the model the drawing shows
+        view = SW.cast(SW.cast(SW.drawing(doc).GetFirstView(), "IView").GetNextView(), "IView")
+        model = SW.app.GetOpenDocumentByName(view.GetReferencedModelName()) if view is not None else None
+        if model is None:
+            raise SwError("The drawing has no model view to read dimensions from.")
+        doc = SW.cast(model, "IModelDoc2")
+    rows, chain = [], []
+    for i, ct in enumerate(contributors):
+        d = int(ct.get("direction", 1))
+        if d not in (1, -1):
+            raise SwError(f"contributors[{i}]: direction must be 1 or -1.")
+        if "dimension" in ct:
+            dim = doc.Parameter(str(ct["dimension"]))
+            if dim is None:
+                raise SwError(f"contributors[{i}]: no dimension '{ct['dimension']}' in {doc.GetTitle()} (names as in the dimensions tool).")
+            dim = SW.cast(dim, "IDimension")
+            nominal = to_mm(dim.SystemValue)
+            tol = SW.cast(dim.Tolerance, "IDimensionTolerance")
+            plus = minus = 0.0
+            if tol is not None and tol.Type not in (C.swTolNONE, C.swTolBASIC):
+                plus, minus = to_mm(tol.GetMaxValue()), -to_mm(tol.GetMinValue())
+            label = str(ct["dimension"])
+        else:
+            if "nominal" not in ct:
+                raise SwError(f"contributors[{i}] needs dimension or nominal.")
+            nominal, plus, minus = float(ct["nominal"]), float(ct.get("plus", 0)), abs(float(ct.get("minus", ct.get("plus", 0))))
+            label = ct.get("name") or f"#{i + 1}"
+        chain.append((nominal, plus, minus, d))
+        rows.append({"name": label, "direction": d, "nominal": round(nominal, 4), "plus": round(plus, 4), "minus": round(minus, 4)})
+    r = shapes.tolerance_stack(chain)
+    out: dict[str, Any] = {"contributors": rows, "nominal": round(r["nominal"], 4), "mean": round(r["mean"], 4),
+                           "worst_case": [round(v, 4) for v in r["worst_case"]], "rss": [round(v, 4) for v in r["rss"]]}
+    untoleranced = [x["name"] for x in rows if x["plus"] == 0 and x["minus"] == 0]
+    if untoleranced:
+        out["warning"] = f"No tolerance on {', '.join(untoleranced)}; they count as exact."
+    if requirement:
+        lo, hi = requirement.get("min", -math.inf), requirement.get("max", math.inf)
+        out["worst_case_ok"] = lo <= r["worst_case"][0] and r["worst_case"][1] <= hi
+        out["rss_ok"] = lo <= r["rss"][0] and r["rss"][1] <= hi
+    return out

@@ -1021,6 +1021,39 @@ def test_spline_editing(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_tolerance_stack(tmp_path: Path):
+    """A clearance stack: a housing width toleranced on the drawing, less a spacer and a bracket."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [0, 0], "corner2": [50, 30]}])
+        await c.call("finish_sketch", fully_define=True)
+        await c.call("extrude", depth=10)
+        width = next(d["name"] for d in (await c.call("dimensions", feature="Sketch1"))["dimensions"]["Sketch1"] if d["value"] == 50)
+        width = "@".join(width.split("@")[:2])
+        await c.call("save_document", path="housing.sldprt")
+        drw = await c.call("create_drawing", sheet="A3", isometric=False)
+        try:
+            for v in drw["views"]:
+                if width in [d["name"] for d in (await c.call("view_dimensions", view=v["name"]))["dimensions"]]:
+                    await c.call("view_dimensions", view=v["name"], tolerance={width: {"type": "bilateral", "plus": 0.1, "minus": 0.0}})
+            r = await c.call("tolerance_stack", requirement={"min": 0.1, "max": 0.5}, contributors=[
+                {"dimension": width, "direction": 1},
+                {"name": "spacer", "nominal": 20, "plus": 0.05, "minus": 0.05, "direction": -1},
+                {"name": "bracket", "nominal": 29.8, "plus": 0, "minus": 0.1, "direction": -1}])
+            assert r["contributors"][0]["plus"] == pytest.approx(0.1) and r["contributors"][0]["minus"] == pytest.approx(0)
+            assert r["nominal"] == pytest.approx(0.2) and r["worst_case"] == pytest.approx([0.15, 0.45])
+            assert r["rss"] == pytest.approx([0.3 - 0.0866, 0.3 + 0.0866], abs=1e-4) and r["worst_case_ok"] and r["rss_ok"]
+            tight = await c.call("tolerance_stack", requirement={"min": 0.2}, contributors=r["contributors"])
+            assert tight["worst_case_ok"] is False and tight["rss_ok"] is True  # worst case 0.15 < 0.2; RSS 0.213
+        finally:
+            await c.call("close_document")
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

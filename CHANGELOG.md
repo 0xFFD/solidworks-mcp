@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `tolerance_stack` computes worst-case and RSS limits of a one-dimensional dimension chain (clearances, gaps,
+  grip lengths) from model dimensions and their tolerances or given values, and checks a requirement.
 - `modify_sketch` ops `set_point` (a point at exact coordinates; spline fit points reshape the spline through
   them) and `spline_insert` (add a fit point), for fairings and airfoil sections.
 - `subassembly` forms a new sub-assembly from chosen components (kits and installations for the indented BOM)
