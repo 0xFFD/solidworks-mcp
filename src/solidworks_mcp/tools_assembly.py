@@ -463,3 +463,112 @@ def subassembly(
     if after != before:
         raise SwError("The restructure moved components; undo it in SolidWorks and check the mates of the moved components.")
     return {"action": action, "subassembly": label, "components": [c.Name2 for c in g.components(doc)]}
+
+
+def _pose(comp: Any) -> tuple[list[list[float]], list[float]]:
+    arr = list(SW.cast(comp.Transform2, "IMathTransform").ArrayData)
+    return [arr[0:3], arr[3:6], arr[6:9]], arr[9:12]
+
+
+def _relative_rotation(r0: list[list[float]], r1: list[list[float]]) -> tuple[float, list[float]]:
+    """Angle (deg) and axis of the rotation taking orientation r0 to r1 (rows are the rotated axes)."""
+    m = [[sum(r1[k][i] * r0[k][j] for k in range(3)) for j in range(3)] for i in range(3)]  # r1^T r0 in row form
+    cos = max(-1.0, min(1.0, (m[0][0] + m[1][1] + m[2][2] - 1) / 2))
+    ang = math.degrees(math.acos(cos))
+    axis = [m[2][1] - m[1][2], m[0][2] - m[2][0], m[1][0] - m[0][1]]
+    n = math.sqrt(sum(a * a for a in axis))
+    return ang, ([round(a / n, 4) for a in axis] if n > 1e-9 else [0.0, 0.0, 0.0])
+
+
+@tool(WRITES)
+def motion_study(
+    motors: Annotated[list[dict[str, Any]], Field(min_length=1, description=(
+        "Motors: {face: 'face@Comp-1/x,y,z' (a cylindrical face for rotary, a planar face for linear), kind: 'rotary' | 'linear', "
+        "rpm (rotary) or speed (linear, mm/s), reverse}."))],
+    duration: Annotated[float, Field(gt=0, description="Study length in seconds.")] = 1.0,
+    times: Annotated[list[float] | None, Field(description="Times (s) to report the components at; default the end.")] = None,
+) -> dict:
+    """Motion study of the active assembly driven by motors (mechanisms, actuators, control surface linkages):
+    calculates it and reports how far every component has moved and turned at the given times, to check travel,
+    ratios and clearances. The study stays in the assembly for playback and video."""
+    doc = SW.active("assembly")
+    C = SW.C
+    comps = [c for c in g.components(doc) if "/" not in c.Name2]
+    start = {c.Name2: _pose(c) for c in comps}
+    mgr = SW.cast(doc.Extension.GetMotionStudyManager(), "IMotionStudyManager")
+    for i, m in enumerate(motors):
+        kind = str(m.get("kind", "rotary")).lower()
+        if kind not in ("rotary", "linear") or not m.get("face"):
+            raise SwError(f"motors[{i}] needs face and kind 'rotary' or 'linear'.")
+        if not m.get("rpm" if kind == "rotary" else "speed"):
+            raise SwError(f"motors[{i}]: a {kind} motor needs {'rpm' if kind == 'rotary' else 'speed (mm/s)'}.")
+    import time as _time
+
+    def build(length: float) -> Any:
+        st = SW.cast(mgr.CreateMotionStudy(), "IMotionStudy")
+        if st is None:
+            raise SwError("SolidWorks could not create a motion study.")
+        st.Activate()  # motors only go on the active study
+        # Basic Motion: a time-stepped solve that drives the motors at constant speed (an animation study eases
+        # in and out, so its positions do not follow the motor speed)
+        st.StudyType = C.swMotionStudyTypePhysicalSimulation
+        st.SetDuration(float(length))
+        for i, m in enumerate(motors):
+            kind = str(m.get("kind", "rotary")).lower()
+            md = SW.cast(st.CreateDefinition(C.swFmAEMRotationalMotor if kind == "rotary" else C.swFmAEMLinearMotor), "ISimulationMotorFeatureData")
+            face = g.resolve(doc, m["face"]).obj
+            md.Location = face
+            md.DirectionReference = face
+            md.ReverseDirection = bool(m.get("reverse", False))
+            md.ConstantSpeedMotor(float(m["rpm"]) * 2 * math.pi / 60 if kind == "rotary" else mm(float(m["speed"])))  # rad/s or m/s
+            if st.CreateFeature(md) is None:
+                raise SwError(f"motors[{i}]: SolidWorks could not add the motor on {m['face']} (rotary needs a cylindrical or circular "
+                              "reference, linear a planar face or straight edge).")
+        return st
+
+    def solve(st: Any, length: float) -> float:
+        """Solve to `length` and return the time it stopped at (the solver may end on its own step). Calculate
+        returns at once and solves in the background, so this waits until it has stopped and stayed stopped."""
+        st.SetDuration(float(length))
+        if not st.Calculate():
+            raise SwError("The motion study did not calculate; check the mates (an over-constrained or unmated assembly fails).")
+        t0 = _time.time()
+        last, steady = None, 0
+        while steady < 10:
+            if _time.time() - t0 > max(120.0, 30 * length):
+                raise SwError("The motion study did not finish calculating in time.")
+            _time.sleep(0.15)
+            now = st.GetTime()
+            steady = steady + 1 if (now == last and now > 0 and not st.IsPlaying) else 0
+            last = now
+        return float(last)
+
+    rows = []
+    st = build(duration)
+    # each time is the end state of a solve to that time: Basic Motion stores coarse frames, and scrubbing to a
+    # time in between shows the frame before it
+    for t in sorted(times or [duration]):
+        if not 0 < t <= duration:
+            raise SwError(f"Time {t} is outside the study (0 to {duration} s].")
+        solved = solve(st, t)
+        doc.GraphicsRedraw2()
+        at: dict[str, Any] = {}
+        for c in comps:
+            r0, p0 = start[c.Name2]
+            r1, p1 = _pose(c)
+            ang, axis = _relative_rotation(r0, r1)
+            move = [round(to_mm(p1[k] - p0[k]), 4) for k in range(3)]
+            if ang > 1e-3 or any(abs(v) > 1e-4 for v in move):
+                at[c.Name2] = {"moved_mm": move, "turned_deg": round(ang, 3), "axis": axis}
+        rows.append({"time_s": t, **({"solved_time_s": round(solved, 6)} if abs(solved - t) > 1e-6 else {}), "components": at})
+    if abs(st.GetTime() - duration) > 1e-6:
+        solve(st, duration)  # leave the whole study calculated for playback and video
+    st.SetTime(0.0)  # put the components back where they started, so the model reads as before
+    # back to the Model tab: left on the study, later mates and edits would go into the study, not the model
+    mgr.ActivateMotionStudy("Model")
+    doc.GraphicsRedraw2()
+    back = [c.Name2 for c in comps if max(abs(a - b) for a, b in zip(_pose(c)[1], start[c.Name2][1])) > 1e-7]
+    out = {"study": st.Name, "duration_s": duration, "results": rows}
+    if back:
+        out["warning"] = f"{', '.join(back)} did not return to the start; check list_components before editing further."
+    return out

@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `motion_study` drives an assembly with rotary (rpm) and linear (mm/s) motors in Basic Motion and reports how far
+  each component moved and turned at chosen times (each read as the end of a solve to that time, since the
+  stored frames are coarse and Calculate returns before solving), then puts the model back as it was.
 - `trim_members(corner='end')` trims or extends members to a boundary member at T-joints, moving each member's end
   face onto the boundary's facing face; the cut list follows.
 - `fill_surface` patches a closed loop of edges (optionally knitting into a solid) and `trim_surface` trims a surface

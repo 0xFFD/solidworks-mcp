@@ -1356,6 +1356,47 @@ def test_direct_editing_of_imports(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_motion_study(tmp_path: Path):
+    """A motor-driven rotor and slider: positions at chosen times match speed x time, and the model is left as it was."""
+
+    async def body(c: Session):
+        async def part(name, entities, plane, depth):
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on=plane)
+            await c.call("sketch", entities=entities)
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=depth)
+            await c.call("save_document", path=name)
+            await c.call("close_document")
+
+        await part("shaft.sldprt", [{"type": "circle", "center": [0, 0], "diameter": 10}], "plane:Front", 20)
+        await part("rotor.sldprt", [{"type": "circle", "center": [0, 0], "diameter": 40}, {"type": "circle", "center": [0, 0], "diameter": 10}], "plane:Front", 5)
+        await part("rail.sldprt", [{"type": "rectangle", "corner1": [-50, -10], "corner2": [50, 10]}], "plane:Top", 10)
+        await part("slider.sldprt", [{"type": "rectangle", "corner1": [0, 0], "corner2": [10, 10]}], "plane:Top", 5)
+        await c.call("new_document", kind="assembly")
+        try:
+            await c.call("insert_component", path="shaft.sldprt", fix=True)
+            await c.call("insert_component", path="rotor.sldprt")
+            await c.call("add_mate", type="concentric", refs=["face@rotor-1/5,0,2.5", "face@shaft-1/5,0,10"])
+            await c.call("add_mate", type="coincident", refs=["face@rotor-1/15,0,0", "face@shaft-1/0,0,0"])
+            spin = await c.call("motion_study", motors=[{"face": "face@rotor-1/20,0,2.5", "kind": "rotary", "rpm": 60}], duration=1.0, times=[0.25, 0.5])
+            assert [r["components"]["rotor-1"]["turned_deg"] for r in spin["results"]] == pytest.approx([90, 180], abs=0.05)
+            await c.call("insert_component", path="rail.sldprt", position=[0, 100, 0], fix=True)
+            await c.call("insert_component", path="slider.sldprt", position=[-20, 110, 5])
+            await c.call("add_mate", type="coincident", refs=["face@slider-1/-15,110,0", "face@rail-1/0,110,0"])
+            await c.call("add_mate", type="coincident", refs=["face@slider-1/-15,112.5,5", "face@rail-1/0,105,10"], alignment="aligned")
+            before = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
+            slide = await c.call("motion_study", motors=[{"face": "face@slider-1/-10,112.5,0", "kind": "linear", "speed": 10}], duration=2.0, times=[0.73, 1.95])
+            for r in slide["results"]:  # speed x the time actually solved (the solver may round the end time to its step)
+                assert r["components"]["slider-1"]["moved_mm"][0] == pytest.approx(10 * r.get("solved_time_s", r["time_s"]), abs=0.01)
+            after = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
+            assert after == before and "warning" not in slide  # the model is back where it started
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")
