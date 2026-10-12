@@ -10,6 +10,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from . import geometry as g
+from . import shapes
 from .com import SW, const_name, doc_kind, mm, to_deg, to_mm
 from .errors import SwError
 from .registry import READ_ONLY, WRITES, app, tool
@@ -571,7 +572,7 @@ def create_drawing(
         for n in ("swInsertDimensionsMarkedForDrawing", "swInsertDatums", "swInsertDatumTargets", "swInsertGTols", "swInsertSFSymbols", "swInsertNotes",
                   "swInsertCThreads", "swInsertHoleWizardProfileDimensions", "swInsertHoleWizardLocationDimensions", "swInsertholeCallout"):
             types |= getattr(C, n)
-        drw.InsertModelAnnotations3(C.swImportModelItemsFromEntireModel, types, True, False, False, False)
+        drw.InsertModelAnnotations3(C.swImportModelItemsFromEntireModel, types, True, True, False, False)
     doc.ForceRebuild3(True)
     doc.ViewZoomtofit2()
     out: dict[str, Any] = {"drawing": doc.GetTitle(), "model": str(mpath), "projection": projection,
@@ -1138,6 +1139,54 @@ def breakout_section(
     return out
 
 
+def _room(drw: Any, view: Any, sheet_w: float, sheet_h: float) -> dict[str, float]:
+    """Free distance on each side of a view up to the nearest view beside it, or the sheet edge (metres)."""
+    x0, y0, x1, y1 = _outline(view)
+    room = {"top": sheet_h - y1, "bottom": y0, "right": sheet_w - x1, "left": x0}
+    sheet_view = SW.cast(drw.GetFirstView(), "IView")
+    other = SW.cast(sheet_view.GetNextView(), "IView") if sheet_view is not None else None
+    while other is not None:
+        if other.GetName2() != view.GetName2():
+            a0, b0, a1, b1 = _outline(other)
+            if a0 < x1 and a1 > x0:  # overlaps across: above or below
+                if b0 >= y1:
+                    room["top"] = min(room["top"], b0 - y1)
+                elif b1 <= y0:
+                    room["bottom"] = min(room["bottom"], y0 - b1)
+            if b0 < y1 and b1 > y0:  # beside
+                if a0 >= x1:
+                    room["right"] = min(room["right"], a0 - x1)
+                elif a1 <= x0:
+                    room["left"] = min(room["left"], x0 - a1)
+        other = SW.cast(other.GetNextView(), "IView")
+    return {k: max(0.0, v - 0.002) for k, v in room.items()}
+
+
+def _text_depth(ann: Any, vertical: bool) -> float:
+    """How far a dimension's text reaches across its row (sheet metres): its height, or its width when the
+    text reads horizontally on a vertical dimension (ASME unidirectional)."""
+    data = SW.cast(ann.GetDisplayData(), "IDisplayData")
+    best = 0.0
+    for i in range(data.GetTextCount() if data is not None else 0):
+        h = data.GetTextHeightAtIndex(i)
+        across_is_width = vertical == (abs(math.sin(data.GetTextAngleAtIndex(i))) < 0.5)
+        best = max(best, len(data.GetTextAtIndex(i) or "") * h * 0.8 if across_is_width else h)
+    return best
+
+
+def _is_vertical(ann: Any) -> bool | None:
+    """Whether a linear dimension measures vertically on the sheet, from its first extension line (which runs
+    across the measured direction); None for aligned dimensions."""
+    data = SW.cast(ann.GetDisplayData(), "IDisplayData")
+    if data is None or data.GetLineCount() < 1:
+        return None
+    line = list(data.GetLineAtIndex3(0))
+    dx, dy = abs(line[7] - line[4]), abs(line[8] - line[5])
+    if min(dx, dy) > 0.02 * max(dx, dy, 1e-12):
+        return None
+    return dx > dy
+
+
 def _view_dims(v: Any) -> list[tuple[str, Any, Any]]:
     """(short name, IDisplayDimension, IDimension) for every dimension shown in a view."""
     out = []
@@ -1160,6 +1209,8 @@ def view_dimensions(
         "symmetric (± plus), bilateral (+plus / -minus), limit (shown as upper and lower size), min, max; ISO fits with "
         "{type: fit | fit_with_tolerance | fit_tolerance_only, hole: 'H7', shaft: 'g6'}."))] = None,
     decimals: Annotated[dict[str, int] | None, Field(description="Decimal places per dimension, {name: places}; the tolerance uses the same.")] = None,
+    arrange: Annotated[bool, Field(description="Stack the linear dimensions around the view in rows by size, shortest nearest the part, spacing apart (run before move).")] = False,
+    spacing: Annotated[float, Field(gt=0, description="arrange: distance between rows in sheet mm.")] = 8.0,
 ) -> dict:
     """List the dimensions shown in a drawing view with their values, tolerances and text positions (sheet
     mm); move them to tidy crowded annotations, and set tolerances (±, bilateral, limits, basic) and precision."""
@@ -1168,6 +1219,27 @@ def view_dimensions(
     v = _view(drw, view)
     dims = _view_dims(v)
     by_name = {n: (dd, dim) for n, dd, dim in dims}
+    arranged: dict[str, Any] = {}
+    if arrange:
+        k = v.ScaleDecimal or 1.0
+        linear = []
+        for n, dd, dim in dims:
+            if dd.GetType() != SW.C.swLinearDimension:
+                continue
+            ann = SW.cast(dd.GetAnnotation(), "IAnnotation")
+            vertical = _is_vertical(ann)
+            if vertical is not None:
+                linear.append((n, abs(dim.SystemValue) * k, tuple(list(ann.GetPosition())[:2]), vertical, _text_depth(ann, vertical)))
+        sw_, sh_ = _sheet_size(drw)
+        room = _room(drw, v, sw_, sh_)
+        # chained dimensions touch and share a row
+        arranged = shapes.arrange_dimensions(linear, _outline(v), mm(spacing), clearance=mm(2), room=room)
+        for name, (x, y) in arranged.items():
+            SW.cast(by_name[name][0].GetAnnotation(), "IAnnotation").SetPosition2(x, y, 0.0)
+        x0, y0, x1, y1 = _outline(v)
+        off = sorted(n for n, (x, y) in arranged.items()
+                     if not (0 < x < sw_ and 0 < y < sh_) or y - y1 > room["top"] + 1e-6 or y0 - y > room["bottom"] + 1e-6
+                     or x - x1 > room["right"] + 1e-6 or x0 - x > room["left"] + 1e-6)
     for name, pos in (move or {}).items():
         if name not in by_name:
             raise SwError(f"No dimension '{name}' in {view}. Dimensions: {sorted(by_name)}")
@@ -1208,7 +1280,7 @@ def view_dimensions(
         if name not in by_name:
             raise SwError(f"No dimension '{name}' in {view}. Dimensions: {sorted(by_name)}")
         by_name[name][0].SetPrecision3(int(places), -1, int(places), -1)
-    if move or tolerance or decimals:
+    if move or tolerance or decimals or arranged:
         doc.EditRebuild3()
         doc.GraphicsRedraw2()
     names_tol = {v: k for k, v in tol_types.items()}
@@ -1230,4 +1302,9 @@ def view_dimensions(
     out: dict[str, Any] = {"view": view, "outline_mm": [round(to_mm(c), 2) for c in _outline(v)], "dimensions": rows}
     if move:
         out["moved"] = sorted(move)
+    if arrange:
+        out["arranged"] = sorted(arranged)
+        if off:
+            out["warning"] = (f"{', '.join(off)} did not fit between the view and its neighbours or the sheet edge; "
+                              "move the views apart or use a larger sheet.")
     return out

@@ -436,6 +436,17 @@ def test_drawing_details(tmp_path: Path):
             # a drawing of a model that is not open
             drw = await c.call("create_drawing", model="block.sldprt", isometric=False, save_as="block.slddrw")
             front, top = drw["views"][0]["name"], drw["views"][1]["name"]
+            shown = [d["name"] for v in drw["views"] for d in (await c.call("view_dimensions", view=v["name"]))["dimensions"]]
+            assert shown and len(shown) == len(set(shown))  # each model dimension in one view only
+            rows = []
+            for v in drw["views"]:
+                tidy = await c.call("view_dimensions", view=v["name"], arrange=True, spacing=8)
+                x0, y0, x1, y1 = tidy["outline_mm"]
+                for d in tidy["dimensions"]:
+                    if d["name"] in tidy["arranged"]:
+                        x, y = d["position_mm"]
+                        rows.append([h for h in (y - y1, y0 - y, x - x1, x0 - x) if h > 0])  # off the view on its side
+            assert rows and all(any(abs(h / 8 - round(h / 8)) < 0.01 for h in r) for r in rows)  # rows 8 mm apart
             section = await c.call("section_view", view=top, direction="horizontal", offset=-15)
             assert section["cut_faces"] > 0 and "warning" not in section  # the cut goes through the counterbores
             stepped = await c.call("section_view", view=top, label="C", points=[[-50, 10, 15], [-10, 10, 15], [-10, 10, -15], [50, 10, -15]])

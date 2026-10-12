@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `view_dimensions(arrange=true)` packs a view's linear dimensions in rows by size (chained dimensions share a
+  row), spaced for their text and kept clear of neighbouring views and the sheet edge.
 - Radial explode steps: `exploded_view(steps=[{components, radial: true, distance}])` moves a ring of parts
   straight out from its centre axis (fastener patterns on flanges and bulkheads).
 - `hole` drills curved faces too: radial holes in tubes and shafts are placed exactly and square to the
@@ -86,6 +88,8 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- `create_drawing` imported model dimensions into every view that could show them, so the same dimension
+  appeared two or three times; each is now shown once.
 - A failed `edge_flange` left its profile planes and sketches in the tree (deleting them in one selection
   missed some); they are now removed one by one.
 - A `center_rectangle` drawn inside another on the same centre was pulled to the outer rectangle's proportions

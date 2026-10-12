@@ -152,3 +152,30 @@ def test_rounded_path_3d_bends():
     assert all(math.dist(ends[i][1], ends[i + 1][0]) < 1e-9 for i in range(len(ends) - 1))
     with pytest.raises(SwError):
         shapes.rounded_path_3d([(0, 0, 0), (5, 0, 0), (5, 5, 0)], [0, 10, 0])
+
+
+def test_arrange_dimensions_stacks_by_size():
+    outline = (0, 0, 100, 50)
+    # spans: short 10..30, mid 10..50 (overlaps short), side 70..90 (clear of both), long 0..100
+    dims = [("long", 100, (50, 70), False), ("short", 20, (20, 52), False), ("mid", 40, (30, 90), False), ("side", 20, (80, 60), False),
+            ("right", 50, (130, 25), True), ("thick", 10, (104, -8), True), ("inside", 8, (40, 20), False)]
+    pos = shapes.arrange_dimensions(dims, outline, 8)
+    assert pos["short"] == (20, 58) and pos["side"] == (80, 58)  # share the first row
+    assert pos["mid"] == (30, 66) and pos["long"] == (50, 74)
+    assert pos["thick"] == (108, -8) and pos["right"] == (108, 25)  # vertical: right of the view; no overlap in y, one row
+    assert "inside" not in pos
+
+
+def test_arrange_dimensions_wide_text_widens_columns():
+    # horizontal text 12 mm wide on vertical dimensions: columns 14 mm apart instead of 8
+    dims = [("a", 30, (110, 25), True, 12.0), ("b", 40, (115, 25), True, 12.0)]
+    pos = shapes.arrange_dimensions(dims, (0, 0, 100, 50), 8, clearance=2)
+    assert pos["a"] == (114, 25) and pos["b"] == (128, 25)
+
+
+def test_arrange_dimensions_squeezes_into_room():
+    dims = [("a", 30, (110, 25), True, 12.0), ("b", 40, (115, 25), True, 12.0)]
+    pos = shapes.arrange_dimensions(dims, (0, 0, 100, 50), 8, clearance=2, room={"right": 30})
+    assert pos["a"] == (109, 25) and pos["b"] == (118, 25)  # (30 - 12) / 2 = 9 mm columns
+    tight = shapes.arrange_dimensions(dims, (0, 0, 100, 50), 8, clearance=2, room={"right": 10})
+    assert tight["b"] == (116, 25)  # never closer than the spacing

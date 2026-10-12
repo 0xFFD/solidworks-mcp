@@ -275,3 +275,56 @@ def rounded_path_3d(pts: list[tuple[float, float, float]], radii: list[float], c
             if math.dist(a, b) > 1e-12:
                 items.append(("line", a, b))
     return items
+
+
+def arrange_dimensions(dims: list[tuple], outline: tuple[float, float, float, float],
+                       spacing: float, gap: float = 0.0, clearance: float = 0.0,
+                       room: dict[str, float] | None = None) -> dict[str, tuple[float, float]]:
+    """New text positions for linear dimensions around a drawing view, packed in rows by side.
+
+    `dims` are (name, length on the sheet, (x, y) text position, vertical[, depth]) and `outline` is
+    (x0, y0, x1, y1); depth is how far the text reaches across the row (its width when horizontal text labels a
+    vertical dimension), and a side's rows are at least the largest depth plus `clearance` apart. `room` caps
+    how far each side may reach (the gap to a neighbouring view or the sheet edge): rows are squeezed to fit,
+    but never closer than `spacing`.
+    Horizontal dimensions go above or below the view (the side their text is on), vertical ones left or right.
+    Each side is filled in rows `spacing` apart, shortest first, each dimension in the nearest row where it
+    does not overlap another along the row (its span is its length, centred on the text). Dimensions whose text
+    sits inside the outline across the row direction are left where they are. The text keeps its position
+    along the dimension line.
+    """
+    x0, y0, x1, y1 = outline
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    sides: dict[str, list[tuple[float, str, tuple[float, float]]]] = {"top": [], "bottom": [], "left": [], "right": []}
+    depth: dict[str, float] = {}
+    for item in dims:
+        name, length, (x, y), vertical = item[:4]
+        depth[name] = item[4] if len(item) > 4 else 0.0
+        if vertical:
+            if x0 <= x <= x1:
+                continue
+            sides["right" if x > cx else "left"].append((length, name, (x, y)))
+        else:
+            if y0 <= y <= y1:
+                continue
+            sides["top" if y > cy else "bottom"].append((length, name, (x, y)))
+    out: dict[str, tuple[float, float]] = {}
+    for side, items in sides.items():
+        rows: list[list[tuple[float, float]]] = []
+        placed: list[tuple[str, int, float, float]] = []
+        for length, name, (x, y) in sorted(items):
+            c = x if side in ("top", "bottom") else y
+            span = (c - length / 2 - gap, c + length / 2 + gap)
+            k = next((i for i, row in enumerate(rows) if all(span[1] <= a or span[0] >= b for a, b in row)), len(rows))
+            if k == len(rows):
+                rows.append([])
+            rows[k].append(span)
+            placed.append((name, k, x, y))
+        pitch = max([spacing] + [depth[n] + clearance for _, n, _ in items])
+        if room and side in room and rows:
+            # the outermost row's text must stay inside the room
+            pitch = max(spacing, min(pitch, (room[side] - max(depth.get(n, 0.0) for _, n, _ in items)) / len(rows)))
+        for name, k, x, y in placed:
+            d = pitch * (k + 1)
+            out[name] = {"top": (x, y1 + d), "bottom": (x, y0 - d), "right": (x1 + d, y), "left": (x0 - d, y)}[side]
+    return out
