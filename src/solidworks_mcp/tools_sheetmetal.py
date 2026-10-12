@@ -586,3 +586,66 @@ def forming_tool(
     out = result(doc, f, "forming tool")
     out.update(tool=Path(path).stem, position=position)
     return out
+
+
+@tool(WRITES)
+def jog(
+    line: Annotated[list[list[float]], Field(min_length=2, max_length=2, description="The first bend line on the sheet face, [[x, y, z], [x, y, z]] model mm (the one nearer the fixed side).")],
+    fixed: Annotated[list[float], Field(min_length=3, max_length=3, description="A point [x, y, z] on the part of the sheet that stays in place.")],
+    offset: Annotated[float, Field(gt=0, description="Jog (joggle) depth: how far the far end moves off the sheet plane, mm.")],
+    angle: Annotated[float, Field(gt=0, lt=90, description="Angle of the jog's slope, degrees.")] = 30.0,
+    radius: Annotated[float | None, Field(description="Inside bend radius in mm; default is the part's.")] = None,
+    reverse: Annotated[bool, Field(description="Jog to the other side of the sheet.")] = False,
+) -> dict:
+    """Jog (joggle) in a sheet: two opposite bends that step the far part of the sheet off its plane by offset and
+    keep it parallel, as where a skin or bracket passes over a doubler or flange. Built from two sketched bends
+    whose spacing is solved so the measured offset matches."""
+    from .tools_inspect import feature_action
+    from .tools_sketch import finish_sketch, sketch, start_sketch
+
+    doc = SW.active("part")
+    _sheet_metal_feature(doc)
+    a, b = ([mm(c) for c in p] for p in line)
+    fx = [mm(c) for c in fixed]
+    face = g.resolve(doc, "face@{},{},{}".format(*[(line[0][i] + line[1][i]) / 2 for i in range(3)]))
+    n = _unit(list(face.obj.Normal))
+    along = _unit([b[i] - a[i] for i in range(3)])
+    u = _unit([n[(i + 1) % 3] * along[(i + 2) % 3] - n[(i + 2) % 3] * along[(i + 1) % 3] for i in range(3)])  # in the face, across the line
+    if sum((fx[i] - a[i]) * u[i] for i in range(3)) > 0:
+        u = [-c for c in u]  # point away from the fixed side
+    face_pt = list(face.obj.GetClosestPointOn(*a))[:3]
+
+    def build(d: float) -> tuple[list[str], float]:
+        made = []
+        far = [[(p[i] + u[i] * d) / 0.001 for i in range(3)] for p in (a, b)]
+        mid = [(a[i] + b[i]) / 2 / 0.001 + u[i] * d / 2 / 0.001 for i in range(3)]
+        for pts, fix, rev in ((far, mid, reverse), ([[c / 0.001 for c in a], [c / 0.001 for c in b]], fixed, not reverse)):
+            start_sketch(on="face@{},{},{}".format(*fixed))
+            sketch(coords="model", entities=[{"type": "line", "from": pts[0], "to": pts[1]}])
+            finish_sketch()
+            made.append(sketched_bend(fixed=list(fix), angle=angle, radius=radius, reverse=rev)["feature"])
+        # the offset: the far region's face of the same side, measured along the original normal
+        beyond = [f for f in g.faces(doc) if SW.cast(f.GetSurface(), "ISurface").IsPlane() and sum(x * y for x, y in zip(f.Normal, n)) > 0.9999]
+        offs = []
+        for f in beyond:
+            box = f.GetBox
+            box = box() if callable(box) else box
+            c = list(f.GetClosestPointOn(*[(box[i] + box[i + 3]) / 2 for i in range(3)]))[:3]
+            if sum((c[i] - a[i]) * u[i] for i in range(3)) > d:
+                offs.append(abs(sum((c[i] - face_pt[i]) * n[i] for i in range(3))))
+        return made, (max(offs) if offs else 0.0)
+
+    d = mm(offset) / math.sin(math.radians(angle))
+    for _ in range(4):
+        made, got = build(d)
+        if got and abs(got - mm(offset)) < 1e-5:
+            break
+        feature_action(features=list(reversed(made)), action="delete")
+        if not got:
+            raise SwError("The jog did not form; give a straight line across a flat face of the sheet, with room beyond it.")
+        d *= mm(offset) / got
+    else:
+        raise SwError(f"Could not reach a jog offset of {offset} mm (got {to_mm(got):.3f}); try a larger angle or smaller radius.")
+    out = result(doc, g.feature_by_name(doc, made[-1]), "jog")
+    out.update(features=made, offset=round(to_mm(got), 4), spacing=round(to_mm(d), 4), angle=angle)
+    return out

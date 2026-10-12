@@ -407,6 +407,17 @@ def test_sheet_metal(tmp_path: Path):
             assert "could not be placed" in await c.fails("forming_tool", tool_name="dimple", position=[44, 0, 26])  # into the bends
             assert len((await c.call("list_features"))["features"]) == before
             assert "Available:" in await c.fails("forming_tool", tool_name="no such tool", position=[0, 0, 0])
+            await c.call("close_document")
+            # a 1.6 mm joggle in a 1.6 mm strip, so the end can lap over a doubler of the same thickness
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-60, -20], "corner2": [60, 20]}])
+            await c.call("finish_sketch")
+            await c.call("sheet_metal_base", thickness=1.6, bend_radius=1.6)
+            j = await c.call("jog", line=[[0, 0, -20], [0, 0, 20]], fixed=[-30, 0, 0], offset=1.6, angle=30)
+            assert j["offset"] == pytest.approx(1.6, abs=0.01) and len(j["features"]) == 2
+            assert (await c.call("bounding_box"))["size"][1] == pytest.approx(3.2, abs=0.01)  # sheet plus joggle
+            assert (await c.call("flat_pattern"))["bends"] == 2
         finally:
             await c.call("close_document")
 
