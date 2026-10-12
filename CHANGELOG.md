@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `sheet_metal_base(k_factor=...)` sets the part's K-factor (through the template sheet metal feature, the only
+  one SolidWorks honours); a gauge table's K-factor is applied automatically and `flat_pattern` reports it.
 - `jog` steps a sheet off its plane by a given offset with two opposite sketched bends, solving their spacing
   until the measured offset matches (joggles over doublers and flanges).
 - `drawing_table(kind='general')` inserts a table of given cells, or a tabulated dash-number table of the model's

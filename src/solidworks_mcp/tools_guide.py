@@ -259,9 +259,9 @@ MATERIALS AND MINIMUM INSIDE BEND RADIUS (multiples of thickness t, 90 degree be
 - 7075-T6: about 5-9 t and prone to cracking; form in the O or W temper and heat treat, or machine instead.
 - 300-series stainless (annealed): 0.5-1 t. Ti-6Al-4V (annealed): about 3-5 t cold, often hot formed.
 - Bend across the rolling direction when the radius is near the minimum.
-K-FACTOR: about 0.33 for radii below t, 0.40-0.45 for 1-3 t, 0.5 for large radii. SolidWorks uses its
-default (0.5) for the base flange bends; pass k_factor to edge_flange for its bends, and check the
-flat size from flat_pattern against the shop's bend allowance before release.
+K-FACTOR: about 0.33 for radii below t, 0.40-0.45 for 1-3 t, 0.5 for large radii. Set the part's K-factor
+with sheet_metal_base(k_factor=...) (a gauge table's K-factor is applied automatically); edge_flange can
+override it for its own bends. Check the flat size from flat_pattern against the shop's bend allowance before release.
 
 GEOMETRY RULES
 - Flange length at least 4 t (shorter flanges do not form cleanly in a press brake).

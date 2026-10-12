@@ -61,11 +61,12 @@ def sheet_metal_base(
     reverse_thickness: Annotated[bool, Field(description="Add the thickness to the other side of the sketch.")] = False,
     gauge: Annotated[str | None, Field(description="Take thickness (and the bend radius if not given) from this gauge of gauge_table, e.g. 'Gauge 14' or '14'.")] = None,
     gauge_table: Annotated[str | None, Field(description="Gauge table: an .xlsx file, or words naming a SolidWorks sample table ('aluminum metric', 'steel').")] = None,
+    k_factor: Annotated[float | None, Field(gt=0, lt=1, description="K-factor for the part's bends (0.3-0.5; aluminium alloys often 0.4-0.45); default the gauge table's, else SolidWorks' 0.5.")] = None,
 ) -> dict:
     """Start a sheet metal part with a base flange from a sketch: a closed outline gives a flat blank, an
     open profile gives a formed section with the bends. Add edge_flange to fold up edges and flat_pattern
-    to flatten it and export the blank. Bends of the base flange use the part's default K-factor
-    (reported here); edge_flange can set its own."""
+    to flatten it and export the blank. k_factor sets the part's K-factor (used by every bend that does not
+    set its own); edge_flange can still set its own."""
     doc = SW.active("part")
     C = SW.C
     gauge_row = table = None
@@ -91,13 +92,43 @@ def sheet_metal_base(
         data.D1EndConditionDistance = mm(depth)
     f = fm.CreateFeature(data)
     out = result(doc, f, "base flange", f"{name} needs one closed outline, or an open profile with depth=.")
-    out.update(thickness=thickness, bend_radius=bend_radius, k_factor=round(SW.cast(_sheet_metal_feature(doc).GetDefinition(), "ISheetMetalFeatureData").KFactor, 4))
+    if k_factor is None and gauge_row and table.get("k_factor") is not None:
+        k_factor = table["k_factor"]
+    if k_factor is not None:
+        _set_part_k_factor(doc, k_factor)
+    out.update(thickness=thickness, bend_radius=bend_radius, k_factor=round(_part_k_factor(doc), 4))
+    if k_factor is not None and abs(out["k_factor"] - k_factor) > 1e-9:
+        raise SwError(f"SolidWorks kept K-factor {out['k_factor']} instead of {k_factor}.")
     if gauge_row:
         out["gauge"] = gauge_row["gauge"]
-        if table.get("k_factor") is not None:
-            out["table_k_factor"] = table["k_factor"]
-            out["note"] = f"Pass k_factor={table['k_factor']} to edge_flange to use the table's K-factor for those bends."
     return out
+
+
+def _template_sheet_metal(doc: Any) -> Any:
+    """The part's template sheet metal feature: its definition holds the defaults every bend falls back on
+    (the per-body Sheet-Metal feature ignores K-factor changes)."""
+    folder = doc.FeatureManager.GetSheetMetalFolder()
+    if folder is None:
+        raise SwError("The part has no sheet metal folder.")
+    return SW.cast(SW.cast(folder, "ISheetMetalFolder").GetFeature(), "IFeature")
+
+
+def _part_k_factor(doc: Any) -> float:
+    return SW.cast(_template_sheet_metal(doc).GetDefinition(), "ISheetMetalFeatureData").KFactor
+
+
+def _set_part_k_factor(doc: Any, k: float) -> None:
+    f = _template_sheet_metal(doc)
+    data = SW.cast(f.GetDefinition(), "ISheetMetalFeatureData")
+    data.AccessSelections(doc, None)
+    cba = SW.cast(data.GetCustomBendAllowance(), "ICustomBendAllowance")
+    cba.Type = SW.C.swBendAllowanceKFactor
+    cba.KFactor = k
+    data.SetCustomBendAllowance(cba)
+    data.KFactor = k
+    if not f.ModifyDefinition(data, doc, None):
+        raise SwError("SolidWorks rejected the K-factor.")
+    doc.ForceRebuild3(False)
 
 
 def _gauge(table: str | None) -> dict:
@@ -238,7 +269,7 @@ def flat_pattern(
     sm = _sheet_metal_feature(doc)
     fp = _flat_pattern(doc)
     d = SW.cast(sm.GetDefinition(), "ISheetMetalFeatureData")
-    out: dict[str, Any] = {"thickness": to_mm(d.Thickness), "bend_radius": to_mm(d.BendRadius), "default_k_factor": round(d.KFactor, 4)}
+    out: dict[str, Any] = {"thickness": to_mm(d.Thickness), "bend_radius": to_mm(d.BendRadius), "default_k_factor": round(_part_k_factor(doc), 4)}
     was_flat = _is_flat(fp)
     _set_flat(doc, fp, True)
     try:

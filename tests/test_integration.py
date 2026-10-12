@@ -408,6 +408,16 @@ def test_sheet_metal(tmp_path: Path):
             assert len((await c.call("list_features"))["features"]) == before
             assert "Available:" in await c.fails("forming_tool", tool_name="no such tool", position=[0, 0, 0])
             await c.call("close_document")
+            # an L section (sketched on the inside, 40 and 60 mm legs) bent with K = 0.3: flat = 100 - 2 r + pi/2 (r + K t)
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "polyline", "points": [[0, 40], [0, 0], [60, 0]]}])
+            await c.call("finish_sketch")
+            lk = await c.call("sheet_metal_base", thickness=2, bend_radius=2, depth=30, k_factor=0.3)
+            assert lk["k_factor"] == 0.3
+            fp = await c.call("flat_pattern")
+            assert fp["default_k_factor"] == 0.3 and fp["flat_size_mm"][0] == pytest.approx(100 - 4 + 3.14159265 / 2 * (2 + 0.3 * 2), abs=0.01)
+            await c.call("close_document")
             # a 1.6 mm joggle in a 1.6 mm strip, so the end can lap over a doubler of the same thickness
             await c.call("new_document", kind="part")
             await c.call("start_sketch", on="plane:Top")
