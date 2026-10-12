@@ -50,7 +50,9 @@ Typical part workflow:
    configurations=[...]), document_settings (units, ASME or ISO drafting standard),
    add_datum, add_geometric_tolerance and add_surface_finish (GD&T on model faces, carried into drawings).
 7. Output: save_document (native files), export (STEP AP242/AP214/AP203, IGES, Parasolid, STL, 3MF, PDF,
-   DXF, DWG, PNG), create_drawing (standard views, model dimensions and GD&T), section_view, add_note.
+   DXF, DWG, PNG), create_drawing (standard views, model dimensions and GD&T), section_view, add_note;
+   detail_view, projected_view, auxiliary_view, add_view (incl. flat_pattern), sheets, drawing_dimension,
+   drawing_table (bom with balloons, revision block, hole table).
 Assemblies: insert_component (origin at position), add_mate, list_components, interference_check, bom (mass budget).
 Results are proposals for an engineer to review; check every model and drawing before release.
 """

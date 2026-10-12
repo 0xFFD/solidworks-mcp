@@ -192,7 +192,8 @@ def test_tools_registered_with_annotations():
     for name in ("close_document", "feature_action", "undo"):
         assert tools[name].annotations.destructive_hint is True, name
     for name in ("extrude", "hole", "export", "create_drawing", "add_geometric_tolerance", "modify_sketch", "edit_feature", "helix",
-                 "configurations", "combine", "move_body", "sheet_metal_base", "edge_flange", "flat_pattern"):
+                 "configurations", "combine", "move_body", "sheet_metal_base", "edge_flange", "flat_pattern",
+                 "detail_view", "projected_view", "auxiliary_view", "add_view", "sheets", "drawing_dimension", "drawing_table"):
         assert tools[name].annotations.read_only_hint is False, name
     assert "millimetres" in server.INSTRUCTIONS
 

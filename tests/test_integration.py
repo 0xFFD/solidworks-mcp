@@ -342,6 +342,72 @@ def test_sheet_metal(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_drawing_details(tmp_path: Path):
+    """Section, detail, projected and flat pattern views, sheets, dimensions, and BOM, revision and hole tables."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rounded_rectangle", "corner1": [-40, -25], "corner2": [40, 25], "radius": 5}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=10)
+            await c.call("hole", size="M5", kind="counterbore", positions=[[-30, 10, 15], [30, 10, 15], [-30, 10, -15], [30, 10, -15]])
+            await c.call("hole", size="M4", kind="tapped", positions=[[0, 10, 0]])
+            await c.call("custom_properties", set={"Description": "Mounting block"})
+            await c.call("save_document", path="block.sldprt")
+            await c.call("close_document")
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-50, -30], "corner2": [50, 30]}])
+            await c.call("finish_sketch")
+            await c.call("sheet_metal_base", thickness=1.6, bend_radius=1.6)
+            await c.call("edge_flange", edges=["edge@0,0,30", "edge@0,0,-30"], length=15)
+            await c.call("save_document", path="cover.sldprt")
+            await c.call("new_document", kind="assembly")
+            await c.call("insert_component", path="block.sldprt", fix=True)
+            await c.call("insert_component", path="cover.sldprt", position=[0, 40, 0])
+            await c.call("save_document", path="assy.sldasm")
+            await c.call("close_document", name="assy.SLDASM")
+            await c.call("close_document", name="cover.SLDPRT")
+            await c.call("close_document", name="block.SLDPRT")
+
+            # a drawing of a model that is not open
+            drw = await c.call("create_drawing", model="block.sldprt", isometric=False, save_as="block.slddrw")
+            front, top = drw["views"][0]["name"], drw["views"][1]["name"]
+            section = await c.call("section_view", view=top, direction="horizontal", offset=-15)
+            assert section["cut_faces"] > 0 and "warning" not in section  # the cut goes through the counterbores
+            assert (await c.call("detail_view", view=front, center=[30, 10, 15], radius=8, scale="3:1", label="D"))["scale"] == 3
+            right = await c.call("projected_view", view=front, direction="right")
+            views = (await c.call("drawing_views"))["views"]
+            boxes = [v["outline_mm"] for v in views if v["name"] != right["view"]]
+            r = right["outline_mm"]
+            assert not any(r[0] < b[2] and b[0] < r[2] and r[1] < b[3] and b[1] < r[3] for b in boxes)
+            dim = await c.call("drawing_dimension", view=front, refs=["edge@-40,5,20", "edge@40,5,20"], orientation="horizontal")
+            assert dim["value"] == pytest.approx(80)
+            holes = await c.call("drawing_table", kind="hole", view=top, face="face@10,10,0", position=[300, 285], anchor="top_left")
+            assert len(holes["rows"]) == 6 and holes["rows"][-1][-1].startswith("<MOD-DIAM> 3.30")
+            rev = await c.call("drawing_table", kind="revision", revisions=[{"rev": "A", "description": "INITIAL RELEASE", "approved": "QA"}])
+            assert rev["rows"][-1][1:3] == ["A", "INITIAL RELEASE"]
+            sheets = await c.call("sheets", action="add", name="Flat", size="A4")
+            assert sheets["active"] == "Flat"
+            await c.call("add_view", orientation="flat_pattern", model="cover.sldprt")
+            await c.call("sheets", action="activate", name="Sheet1")
+            await c.call("save_document")
+            pdf = await c.call("export", path="block.pdf")
+            assert pdf["bytes"] > 10000
+            await c.call("close_document")
+
+            asm = await c.call("create_drawing", model="assy.sldasm", isometric=False)
+            bom = await c.call("drawing_table", kind="bom", view=asm["views"][0]["name"])
+            assert bom["balloons"] == 2 and [row[2] for row in bom["rows"][1:]] == ["Mounting block", ""]
+            await c.call("close_document")
+        finally:
+            await c.call("sw_info")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from . import geometry as g
-from .com import SW, doc_kind, mm, to_mm
+from .com import SW, const_name, doc_kind, mm, to_deg, to_mm
 from .errors import SwError
 from .registry import READ_ONLY, WRITES, app, tool
 from .tools_doc import TEMPLATE_PREFS, paper_size
@@ -188,12 +188,38 @@ def _inherit_settings(drawing_doc: Any, model_path: Path) -> None:
         dst.SetUserPreferenceInteger(pref, 0, src.GetUserPreferenceInteger(pref, 0))
 
 
+def _load_model(path: Path) -> None:
+    """Views can only be made of a model that is loaded; open it silently when it is not."""
+    if SW.app.GetOpenDocumentByName(str(path)) is not None:
+        return
+    C = SW.C
+    kind = C.swDocASSEMBLY if path.suffix.lower() == ".sldasm" else C.swDocPART
+    active = SW.app.ActiveDoc
+    res = SW.app.OpenDoc6(str(path), kind, C.swOpenDocOptions_Silent, "", 0, 0)
+    if (res[0] if isinstance(res, tuple) else res) is None:
+        raise SwError(f"Could not open {path.name}.")
+    if active is not None:
+        SW.app.ActivateDoc3(SW.cast(active, "IModelDoc2").GetTitle(), False, 0, 0)
+
+
 def _set_position(view: Any, x: float, y: float) -> None:
     """IView.Position needs an explicit array of doubles; a Python tuple loses the first value."""
     import pythoncom
     from win32com.client import VARIANT
 
     view.Position = VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_R8, [x, y])
+
+
+def _view_sketch_xy(view: Any, x: float, y: float) -> tuple[float, float]:
+    """Sheet coordinates to the coordinates of the view's own sketch, where geometry drawn in an
+    activated view lives (it is relative to the view, not the sheet)."""
+    sk = view.GetSketch()
+    if sk is None:
+        return x, y
+    arr = list(SW.cast(SW.cast(sk, "ISketch").ModelToSketchTransform, "IMathTransform").ArrayData)
+    r, t, sc = [arr[0:3], arr[3:6], arr[6:9]], arr[9:12], arr[12] or 1.0
+    p = [x, y, 0.0]
+    return tuple(sc * sum(p[j] * r[j][i] for j in range(3)) + t[i] for i in range(2))  # type: ignore[return-value]
 
 
 def _outline(view: Any) -> tuple[float, float, float, float]:
@@ -248,7 +274,8 @@ def drawing_views() -> dict:
     doc = SW.active("drawing")
     drw = SW.drawing(doc)
     w, h = _sheet_size(drw)
-    return {"sheet_mm": [round(to_mm(w), 1), round(to_mm(h), 1)], "views": _views(drw)}
+    return {"sheet": SW.cast(drw.GetCurrentSheet(), "ISheet").GetName(), "sheets": list(drw.GetSheetNames() or []),
+            "sheet_mm": [round(to_mm(w), 1), round(to_mm(h), 1)], "views": _views(drw)}
 
 
 @tool(WRITES)
@@ -268,6 +295,7 @@ def create_drawing(
     sw, C = SW.app, SW.C
     if model:
         mpath = a.path(model, must_exist=True, suffixes=(".sldprt", ".sldasm"))
+        _load_model(mpath)
     else:
         src = SW.active()
         if doc_kind(src) == "drawing":
@@ -344,15 +372,17 @@ def section_view(
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     off = mm(offset) * target["scale"]
     pad = 0.005
+    parent = _view(drw, view)
     sm = doc.SketchManager
     sm.AddToDB = True
     try:
         if direction == "vertical":
-            line = sm.CreateLine(cx + off, y0 - pad, 0, cx + off, y1 + pad, 0)
+            a, b = _view_sketch_xy(parent, cx + off, y0 - pad), _view_sketch_xy(parent, cx + off, y1 + pad)
             place = (x1 + (x1 - x0) * 0.75, cy)
         else:
-            line = sm.CreateLine(x0 - pad, cy + off, 0, x1 + pad, cy + off, 0)
+            a, b = _view_sketch_xy(parent, x0 - pad, cy + off), _view_sketch_xy(parent, x1 + pad, cy + off)
             place = (cx, y0 - (y1 - y0) * 0.75)
+        line = sm.CreateLine(a[0], a[1], 0, b[0], b[1], 0)
     finally:
         sm.AddToDB = False
     if line is None:
@@ -367,4 +397,411 @@ def section_view(
     sv = SW.cast(sv, "IView")
     _place_beside(sv, drw, view, direction)
     o = [round(to_mm(c), 2) for c in _outline(sv)]
-    return {"section_view": sv.Name, "label": label, "scale": round(sv.ScaleDecimal, 6), "outline_mm": o}
+    doc.ForceRebuild3(True)
+    hatched = sv.GetFaceHatchCount()
+    out = {"section_view": sv.Name, "label": label, "scale": round(sv.ScaleDecimal, 6), "outline_mm": o, "cut_faces": hatched}
+    if not hatched:
+        out["warning"] = "The cutting line does not pass through material; move it with offset (model mm from the view centre)."
+    return out
+
+
+# ------------------------------------------------------------------------------------------ more views, sheets, tables
+
+_ORIENTATIONS = {"front": "*Front", "back": "*Back", "top": "*Top", "bottom": "*Bottom", "left": "*Left", "right": "*Right",
+                 "isometric": "*Isometric", "trimetric": "*Trimetric", "dimetric": "*Dimetric"}
+
+
+def _view(drw: Any, name: str) -> Any:
+    """IView by name on the active sheet."""
+    v = SW.cast(drw.GetFirstView(), "IView")
+    v = SW.cast(v.GetNextView(), "IView") if v is not None else None
+    while v is not None:
+        if v.Name == name:
+            return v
+        v = SW.cast(v.GetNextView(), "IView")
+    raise SwError(f"No view named '{name}' on the active sheet. Use drawing_views.")
+
+
+def _scale(scale: str | None) -> tuple[float, float] | None:
+    if not scale:
+        return None
+    try:
+        n, d = (float(x) for x in scale.split(":"))
+    except ValueError:
+        raise SwError(f"Scale '{scale}' must look like '2:1'.") from None
+    return n, d
+
+
+def _to_sheet(view: Any, p: list[float]) -> list[float]:
+    """Model point (mm) to sheet coordinates (metres) through the view's transform."""
+    import pythoncom
+    from win32com.client import VARIANT
+
+    pt = SW.cast(SW.math().CreatePoint(VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_R8, [mm(c) for c in (list(p) + [0, 0, 0])[:3]])), "IMathPoint")
+    return list(SW.cast(pt.MultiplyTransform(SW.cast(view.ModelToViewTransform, "IMathTransform")), "IMathPoint").ArrayData)[:2]
+
+
+def _view_model(view: Any) -> Any:
+    m = view.ReferencedDocument
+    if m is None:
+        raise SwError(f"{view.Name} does not show a model.")
+    return SW.cast(m, "IModelDoc2")
+
+
+def _free_spot(drw: Any, w: float, h: float) -> tuple[float, float]:
+    """Centre of the emptiest corner region of the sheet, for a new view without a position."""
+    occupied = [[mm(c) for c in v["outline_mm"]] for v in _views(drw)]
+    candidates = [(w * fx, h * fy) for fy in (0.75, 0.45) for fx in (0.2, 0.45, 0.7)]
+
+    def clearance(pt: tuple[float, float]) -> float:
+        return min((max(o[0] - pt[0], pt[0] - o[2], o[1] - pt[1], pt[1] - o[3]) for o in occupied), default=1.0)
+
+    return max(candidates, key=clearance)
+
+
+def _view_result(view: Any) -> dict:
+    return {"view": view.Name, "scale": round(view.ScaleDecimal, 6), "outline_mm": [round(to_mm(c), 2) for c in _outline(view)]}
+
+
+@tool(WRITES)
+def add_view(
+    orientation: Annotated[Literal["front", "back", "top", "bottom", "left", "right", "isometric", "trimetric", "dimetric", "flat_pattern"], Field(description="Standard model view, or flat_pattern for the flat blank of a sheet metal part (with bend lines and bend notes).")],
+    model: Annotated[str | None, Field(description="Saved part or assembly; default is the model of the first view on the sheet.")] = None,
+    position: Annotated[list[float] | None, Field(description="View centre [x, y] in sheet mm; default is a free area of the sheet.")] = None,
+    scale: Annotated[str | None, Field(description="View scale like '1:2'; default is the sheet scale.")] = None,
+    configuration: Annotated[str | None, Field(description="Model configuration to show.")] = None,
+) -> dict:
+    """Place a model view or a sheet metal flat pattern view on the active drawing sheet (for example on a
+    second sheet made with sheets(action='add'))."""
+    doc = SW.active("drawing")
+    drw = SW.drawing(doc)
+    if model:
+        mpath = app().path(model, must_exist=True, suffixes=(".sldprt", ".sldasm"))
+    else:
+        first = None
+        for sheet_name in drw.GetSheetNames() or []:
+            sh = SW.cast(drw.Sheet(sheet_name), "ISheet")
+            views = [SW.cast(v, "IView") for v in (sh.GetViews() or [])]
+            first = next((v for v in views if v.ReferencedDocument is not None), None)
+            if first is not None:
+                break
+        if first is None:
+            raise SwError("The drawing shows no model yet; pass model=<part or assembly path>.")
+        mpath = Path(_view_model(first).GetPathName())
+    _load_model(mpath)
+    w, h = _sheet_size(drw)
+    x, y = (mm(position[0]), mm(position[1])) if position else _free_spot(drw, w, h)
+    if orientation == "flat_pattern":
+        if mpath.suffix.lower() != ".sldprt":
+            raise SwError("A flat pattern view needs a sheet metal part.")
+        v = drw.CreateFlatPatternViewFromModelView3(str(mpath), configuration or "", x, y, 0, False, False)
+        if v is None:
+            raise SwError(f"SolidWorks could not make a flat pattern view of {mpath.name}; is it sheet metal?")
+    else:
+        v = drw.CreateDrawViewFromModelView3(str(mpath), _ORIENTATIONS[orientation], x, y, 0)
+        if v is None:
+            raise SwError(f"SolidWorks could not make a {orientation} view of {mpath.name}.")
+    v = SW.cast(v, "IView")
+    if configuration and orientation != "flat_pattern":
+        v.ReferencedConfiguration = configuration
+    if sc := _scale(scale):
+        v.UseSheetScale = False
+        v.ScaleRatio = list(sc)
+    doc.ForceRebuild3(True)
+    return _view_result(v)
+
+
+@tool(WRITES)
+def projected_view(
+    view: Annotated[str, Field(description="Parent view name.")],
+    direction: Annotated[Literal["left", "right", "above", "below"], Field(description="Where the new view goes relative to the parent; the projection follows the sheet's first or third angle setting.")],
+    gap: Annotated[float, Field(description="Gap between the views in sheet mm.")] = 15.0,
+) -> dict:
+    """Projected view from an existing view, aligned with it."""
+    doc = SW.active("drawing")
+    drw = SW.drawing(doc)
+    parent = _view(drw, view)
+    x0, y0, x1, y1 = _outline(parent)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    gp = mm(gap)
+    x, y = {"left": (x0 - gp - (x1 - x0) / 2, cy), "right": (x1 + gp + (x1 - x0) / 2, cy),
+            "above": (cx, y1 + gp + (y1 - y0) / 2), "below": (cx, y0 - gp - (y1 - y0) / 2)}[direction]
+    doc.ClearSelection2(True)
+    doc.Extension.SelectByID2(view, "DRAWINGVIEW", 0, 0, 0, False, 0, None, 0)
+    v = drw.CreateUnfoldedViewAt3(x, y, 0, False)
+    doc.ClearSelection2(True)
+    if v is None:
+        raise SwError(f"SolidWorks could not project a view from {view}.")
+    v = SW.cast(v, "IView")
+    # slide it further out (staying aligned) while it overlaps another view
+    for _ in range(10):
+        a = _outline(v)
+        hits = [[mm(c) for c in o["outline_mm"]] for o in _views(drw) if o["name"] != v.Name]
+        hits = [b for b in hits if a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]]
+        if not hits:
+            break
+        if direction == "right":
+            _move_outline(v, left=max(b[2] for b in hits) + gp)
+        elif direction == "left":
+            _move_outline(v, right=min(b[0] for b in hits) - gp)
+        elif direction == "above":
+            _move_outline(v, bottom=max(b[3] for b in hits) + gp)
+        else:
+            _move_outline(v, top=min(b[1] for b in hits) - gp)
+    return _view_result(v)
+
+
+@tool(WRITES)
+def detail_view(
+    view: Annotated[str, Field(description="Parent view name.")],
+    center: Annotated[list[float], Field(description="Centre of the detail circle as a model point [x, y, z] in mm (a feature visible in the parent view).")],
+    radius: Annotated[float, Field(gt=0, description="Radius of the detail circle in model mm.")],
+    scale: Annotated[str, Field(description="Detail view scale, e.g. '2:1' or '5:1'.")] = "2:1",
+    label: Annotated[str, Field(description="Detail label letter.")] = "B",
+    position: Annotated[list[float] | None, Field(description="Detail view centre [x, y] in sheet mm; default is a free area.")] = None,
+) -> dict:
+    """Enlarged detail view of a circular region of a view (small features, thread runouts, edge breaks)."""
+    doc = SW.active("drawing")
+    drw = SW.drawing(doc)
+    C = SW.C
+    parent = _view(drw, view)
+    sx, sy = _view_sketch_xy(parent, *_to_sheet(parent, center))
+    if not drw.ActivateView(view):
+        raise SwError(f"Could not activate {view}.")
+    sm = doc.SketchManager
+    sm.AddToDB = True
+    try:
+        circ = sm.CreateCircleByRadius(sx, sy, 0, mm(radius) * parent.ScaleDecimal)
+    finally:
+        sm.AddToDB = False
+    if circ is None:
+        raise SwError("Could not sketch the detail circle.")
+    doc.ClearSelection2(True)
+    SW.cast(circ, "ISketchSegment").Select4(False, None)
+    w, h = _sheet_size(drw)
+    x, y = (mm(position[0]), mm(position[1])) if position else _free_spot(drw, w, h)
+    n, d = _scale(scale) or (2.0, 1.0)
+    v = drw.CreateDetailViewAt4(x, y, 0, C.swDetViewSTANDARD, n, d, label, C.swDetCircleCIRCLE, True, False, False, 5)
+    doc.ClearSelection2(True)
+    if v is None:
+        raise SwError("SolidWorks could not create the detail view; check that the centre lies on the part as seen in the view.")
+    out = _view_result(SW.cast(v, "IView"))
+    out["label"] = label
+    return out
+
+
+@tool(WRITES)
+def auxiliary_view(
+    view: Annotated[str, Field(description="Parent view name.")],
+    edge: Annotated[str, Field(description="Model edge seen as a line in the parent view; the new view looks perpendicular to it ('edge@x,y,z' in model mm).")],
+    label: Annotated[str, Field(description="View label letter.")] = "C",
+    flip: bool = False,
+    position: Annotated[list[float] | None, Field(description="View centre [x, y] in sheet mm; default is a free area.")] = None,
+) -> dict:
+    """Auxiliary view looking square onto an inclined face, perpendicular to an edge in the parent view."""
+    doc = SW.active("drawing")
+    drw = SW.drawing(doc)
+    parent = _view(drw, view)
+    ent = g.resolve(_view_model(parent), edge)
+    if ent.kind != "edge":
+        raise SwError(f"{edge} is not an edge.")
+    doc.ClearSelection2(True)
+    if not parent.SelectEntity(ent.obj, False):
+        raise SwError(f"{edge} is not visible in {view}.")
+    w, h = _sheet_size(drw)
+    x, y = (mm(position[0]), mm(position[1])) if position else _free_spot(drw, w, h)
+    v = drw.CreateAuxiliaryViewAt2(x, y, 0, False, label, True, flip)
+    doc.ClearSelection2(True)
+    if v is None:
+        raise SwError("SolidWorks could not create the auxiliary view; the edge must appear as a straight line in the parent view.")
+    out = _view_result(SW.cast(v, "IView"))
+    out["label"] = label
+    return out
+
+
+@tool(WRITES)
+def sheets(
+    action: Annotated[Literal["list", "add", "activate"], Field(description="list the sheets, add one (it becomes active), or activate one.")] = "list",
+    name: Annotated[str | None, Field(description="Sheet name (add, activate).")] = None,
+    size: Annotated[str, Field(description="Paper size for a new sheet: A4, A4V, A3, A2, A1, A0, A, AV, B, C, D, E.")] = "A3",
+    scale: Annotated[str, Field(description="Sheet scale for a new sheet, e.g. '1:1'.")] = "1:1",
+) -> dict:
+    """Sheets of the active drawing: list, add (for flat patterns, details or parts lists) or activate."""
+    doc = SW.active("drawing")
+    drw = SW.drawing(doc)
+    C = SW.C
+    names = list(drw.GetSheetNames() or [])
+    if action != "list" and not name:
+        raise SwError(f"{action} needs a sheet name.")
+    if action == "add":
+        if name in names:
+            raise SwError(f"A sheet named '{name}' already exists.")
+        n, d = _scale(scale) or (1.0, 1.0)
+        first_angle = bool(list(SW.cast(drw.GetCurrentSheet(), "ISheet").GetProperties2())[4])
+        paper = paper_size(size)
+        template = getattr(C, "swDwgTemplate" + const_name("swDwgPaper", paper))
+        if not drw.NewSheet4(name, paper, template, n, d, first_angle, "", 0, 0, "", 0, 0, 0, 0, 0, 0):
+            raise SwError(f"SolidWorks could not add sheet '{name}'.")
+        drw.ActivateSheet(name)
+    elif action == "activate":
+        if name not in names:
+            raise SwError(f"No sheet named '{name}'. Sheets: {names}")
+        drw.ActivateSheet(name)
+    w, h = _sheet_size(drw)
+    return {"sheets": list(drw.GetSheetNames() or []), "active": SW.cast(drw.GetCurrentSheet(), "ISheet").GetName(),
+            "sheet_mm": [round(to_mm(w), 1), round(to_mm(h), 1)]}
+
+
+def _table_template(name: str) -> str:
+    """A table template shipped with SolidWorks (lang/<language>/...)."""
+    p = Path(SW.app.GetExecutablePath()) / "lang" / SW.app.GetCurrentLanguage() / name
+    if not p.exists():
+        raise SwError(f"Table template {p} was not found; pass template= with a path to a table template.")
+    return str(p)
+
+
+def _table_rows(ta: Any, limit: int = 30) -> list[list[str]]:
+    return [[ta.Text2(r, c, True) for c in range(ta.ColumnCount)] for r in range(min(ta.RowCount, limit))]
+
+
+_ANCHORS = {"top_left": "swBOMConfigurationAnchor_TopLeft", "top_right": "swBOMConfigurationAnchor_TopRight",
+            "bottom_left": "swBOMConfigurationAnchor_BottomLeft", "bottom_right": "swBOMConfigurationAnchor_BottomRight"}
+
+
+@tool(WRITES)
+def drawing_table(
+    kind: Annotated[Literal["bom", "revision", "hole"], Field(description="bom: parts list of an assembly view (with balloons); revision: revision block; hole: hole table of a face seen in a view.")],
+    view: Annotated[str | None, Field(description="bom and hole: the view the table belongs to.")] = None,
+    position: Annotated[list[float] | None, Field(description="Table corner [x, y] in sheet mm (the corner given by anchor).")] = None,
+    anchor: Annotated[Literal["top_left", "top_right", "bottom_left", "bottom_right"], Field(description="Which table corner position refers to.")] = "top_right",
+    balloons: Annotated[bool, Field(description="bom: add item balloons to the view.")] = True,
+    revisions: Annotated[list[dict[str, str]] | None, Field(description="revision: rows to add, e.g. [{'rev': 'A', 'description': 'INITIAL RELEASE', 'approved': 'J. SMITH'}]; the date is filled in.")] = None,
+    face: Annotated[str | None, Field(description="hole: model face holding the holes ('face@x,y,z'), seen square in the view.")] = None,
+    origin: Annotated[str | None, Field(description="hole: model vertex for the X/Y datum, as a point 'x,y,z' in mm (the nearest vertex is used); default is a corner of the face.")] = None,
+    template: Annotated[str | None, Field(description="Table template file; defaults: bom-standard, standard revision block, standard hole table--letters.")] = None,
+) -> dict:
+    """Tables on the active drawing sheet: bill of materials with balloons, revision block with revision
+    rows, or a hole table with tags, positions from a datum corner and hole callouts."""
+    doc = SW.active("drawing")
+    drw = SW.drawing(doc)
+    C = SW.C
+    w, h = _sheet_size(drw)
+    use_anchor = position is None
+    x, y = (mm(position[0]), mm(position[1])) if position else (0.0, 0.0)
+    anc = getattr(C, _ANCHORS[anchor])
+    if kind in ("bom", "hole") and not view:
+        raise SwError(f"A {kind} table needs view=.")
+    out: dict[str, Any] = {"table": kind}
+    if kind == "bom":
+        v = _view(drw, view)
+        if doc_kind(_view_model(v)) != "assembly":
+            raise SwError("A bill of materials needs a view of an assembly.")
+        tpl = app().path(template, must_exist=True) if template else _table_template("bom-standard.sldbomtbt")
+        t = v.InsertBomTable4(use_anchor, x, y, anc, C.swBomType_PartsOnly, v.ReferencedConfiguration or "", str(tpl), False, C.swNumberingType_Detailed, False)
+        if t is None:
+            raise SwError("SolidWorks could not insert the bill of materials.")
+        ta = SW.cast(t, "ITableAnnotation")
+        if balloons:
+            doc.ClearSelection2(True)
+            doc.Extension.SelectByID2(view, "DRAWINGVIEW", 0, 0, 0, False, 0, None, 0)
+            made = drw.AutoBalloon5(SW.cast(drw.CreateAutoBalloonOptions(), "IAutoBalloonOptions"))
+            doc.ClearSelection2(True)
+            out["balloons"] = len(made) if made else 0
+    elif kind == "revision":
+        sheet = SW.cast(drw.GetCurrentSheet(), "ISheet")
+        tpl = app().path(template, must_exist=True) if template else _table_template("standard revision block.sldrevtbt")
+        t = sheet.InsertRevisionTable2(use_anchor, x, y, anc, str(tpl), C.swRevisionTable_CircleSymbol, True)
+        if t is None:
+            raise SwError("SolidWorks could not insert the revision table (a sheet holds one).")
+        rt = SW.cast(t, "IRevisionTableAnnotation")
+        ta = SW.cast(t, "ITableAnnotation")
+        header = [ta.Text2(1, c, True).strip().rstrip(".").upper() for c in range(ta.ColumnCount)]
+        cols = {"rev": "REV", "description": "DESCRIPTION", "date": "DATE", "approved": "APPROVED", "zone": "ZONE"}
+        for row in revisions or []:
+            rev = str(row.get("rev", "")).strip()
+            if not rev:
+                raise SwError("Each revision row needs a 'rev'.")
+            rid = rt.AddRevision(rev)
+            r = rt.GetRowNumberForId(rid)
+            for key, val in row.items():
+                title = cols.get(key.lower())
+                if title in header and key.lower() != "rev":
+                    ta.SetText(r, header.index(title), str(val))
+    else:
+        v = _view(drw, view)
+        model = _view_model(v)
+        if not face:
+            raise SwError("A hole table needs face= (the face the holes go through).")
+        fref = g.resolve(model, face)
+        if fref.kind != "face":
+            raise SwError(f"{face} is not a face.")
+        verts = []
+        for e in SW.cast_all(fref.obj.GetEdges(), "IEdge"):
+            for vx in (e.GetStartVertex(), e.GetEndVertex()):
+                if vx is not None:
+                    verts.append((vx, list(SW.cast(vx, "IVertex").GetPoint())[:3]))
+        if not verts:
+            raise SwError(f"{face} has no corner vertices to use as the datum.")
+        if origin:
+            o = [mm(float(c)) for c in origin.replace("@", "").split(",")]
+            vtx = min(verts, key=lambda it: sum((a - b) ** 2 for a, b in zip(it[1], o)))[0]
+        else:  # lower-left corner as seen in the view
+            vtx = min(verts, key=lambda it: sum(_to_sheet(v, [to_mm(c) for c in it[1]])))[0]
+        doc.ClearSelection2(True)
+        if not (v.SelectEntity(vtx, False) and v.SelectEntity(fref.obj, True)):
+            raise SwError(f"Could not select {face} in {view}.")
+        sm = SW.cast(doc.SelectionManager, "ISelectionMgr")
+        sm.SetSelectedObjectMark(1, 1, C.swSelectionMarkSet)  # datum origin
+        sm.SetSelectedObjectMark(2, 2, C.swSelectionMarkSet)  # face with the holes
+        tpl = app().path(template, must_exist=True) if template else _table_template("standard hole table--letters.sldholtbt")
+        t = v.InsertHoleTable2(use_anchor, x, y, anc, "A", str(tpl))
+        doc.ClearSelection2(True)
+        if t is None:
+            raise SwError("SolidWorks could not insert the hole table.")
+        ta = SW.cast(t, "ITableAnnotation")
+        if ta.RowCount < 2:
+            raise SwError(f"The hole table is empty: no holes go through {face} as seen in {view}.")
+    doc.ForceRebuild3(True)
+    out["rows"] = _table_rows(ta)
+    return out
+
+
+@tool(WRITES)
+def drawing_dimension(
+    view: Annotated[str, Field(description="View name.")],
+    refs: Annotated[list[str], Field(description="One or two model edges, faces or vertices seen in the view ('edge@x,y,z', 'face@x,y,z' in model mm; a face must be seen edge-on as a line).")],
+    position: Annotated[list[float] | None, Field(description="Dimension text position [x, y] in sheet mm; default is just above the view.")] = None,
+    orientation: Annotated[Literal["aligned", "horizontal", "vertical"], Field(description="Linear dimension direction on the sheet.")] = "aligned",
+) -> dict:
+    """Add a reference dimension to a drawing view between model edges, faces or vertices, for sizes the
+    imported model dimensions do not show (overall envelope, hole-to-edge distances)."""
+    doc = SW.active("drawing")
+    drw = SW.drawing(doc)
+    v = _view(drw, view)
+    model = _view_model(v)
+    if not 1 <= len(refs) <= 2:
+        raise SwError("Give one or two references.")
+    doc.ClearSelection2(True)
+    for i, r in enumerate(refs):
+        ent = g.resolve(model, r)
+        if ent.kind not in ("edge", "face"):
+            raise SwError(f"{r} is not an edge or face.")
+        if not v.SelectEntity(ent.obj, i > 0):
+            raise SwError(f"{r} is not visible in {view}.")
+    if position:
+        x, y = mm(position[0]), mm(position[1])
+    else:
+        x0, y0, x1, y1 = _outline(v)
+        x, y = (x0 + x1) / 2, y1 + 0.012
+    from .tools_sketch import _no_dim_prompt
+
+    add = {"aligned": doc.AddDimension2, "horizontal": doc.AddHorizontalDimension2, "vertical": doc.AddVerticalDimension2}[orientation]
+    dd = _no_dim_prompt(lambda: add(x, y, 0))
+    doc.ClearSelection2(True)
+    if dd is None:
+        raise SwError("SolidWorks could not dimension that selection; use edges seen as lines or points in the view.")
+    d = SW.cast(SW.cast(dd, "IDisplayDimension").GetDimension2(0), "IDimension")
+    angular = d.GetType() == SW.C.swDimensionParamTypeDoubleAngular
+    val = d.SystemValue
+    return {"dimension": "@".join(d.FullName.split("@")[:2]), "value": round(to_deg(val), 4) if angular else round(to_mm(val), 4),
+            "unit": "deg" if angular else "mm"}

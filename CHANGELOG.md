@@ -26,6 +26,12 @@ All notable changes to this project are documented here. The format follows
   `edge_flange` (any angle, bend position, radius and K-factor; the flange profile is generated from the
   edge) and `flat_pattern` (thickness, radius, K-factor, bend count and flat blank size; flatten and fold;
   DXF/DWG export of the blank with bend lines, subject to the export-control marking check).
+- Drawings: `detail_view`, `projected_view` (placed clear of other views), `auxiliary_view`, `add_view` (any
+  model view or a sheet metal flat pattern with bend lines and notes), `sheets` (add and activate sheets),
+  `drawing_dimension` (reference dimensions between model edges in a view) and `drawing_table` (bill of
+  materials with balloons, revision block with revision rows, hole table with tags and callouts).
+  `drawing_views` lists the sheets, and `section_view` reports the number of cut faces and warns when the
+  cutting line misses the part.
 - `design_guide('sheet_metal')`: bend radii for 5052, 6061, 2024 and 7075 aluminium, stainless and
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
@@ -36,6 +42,9 @@ All notable changes to this project are documented here. The format follows
 - `list_edges` could report a `mid` point off the edge when the edge runs against its curve's
   parameter direction, so `edge@` references built from it failed. Every reported midpoint now lies on
   its edge.
+- `section_view` drew its cutting line in sheet coordinates inside the view's own sketch, so the line
+  landed beside the part and the section showed no cut. It now cuts where asked.
+- `create_drawing(model=...)` failed when the model was not open; it is now loaded first.
 - Features created in sheet metal parts were not found after creation (the flat pattern stays last in
   the tree), which made `ref_plane`, `shell`, `ref_axis` and `loft` report failure there.
 
