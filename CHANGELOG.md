@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `hole` drills curved faces too: radial holes in tubes and shafts are placed exactly and square to the
+  surface (one Hole Wizard feature per hole), and checked against the requested point.
 - `miter_flange` runs one flange along a chain of connected edges with mitred corners, from a profile
   generated square to the sheet at the free end of the chain.
 - `add_geometric_tolerance(unequal=...)` adds the ASME Y14.5-2018 unequally disposed profile modifier

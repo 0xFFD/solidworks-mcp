@@ -905,6 +905,31 @@ def test_dimxpert_schemes(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_radial_holes(tmp_path: Path):
+    """Holes on a curved face: radial drillings in a tube, each square to the surface at its point."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "circle", "center": [0, 0], "diameter": 40}, {"type": "circle", "center": [0, 0], "diameter": 30}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=100)
+            r = await c.call("hole", size="Ø6.6", fastener="drill", depth=5, positions=[[20, 0, 50], [0, 20, 70], [-20, 0, 30]])
+            assert r["holes"] == 3 and len(r["features"]) == 3
+            axes = {(tuple(f["axis"]), tuple(f["axis_point"])) for f in (await c.call("list_faces", type="cylinder"))["faces"] if f.get("hole") and f["radius"] < 4}
+            assert axes == {((1.0, 0.0, 0.0), (20.0, 0.0, 50.0)), ((0.0, 1.0, 0.0), (0.0, 20.0, 70.0)), ((-1.0, 0.0, 0.0), (-20.0, 0.0, 30.0))}
+            tap = await c.call("hole", size="M5", kind="tapped", depth=5, positions=[[0, -20, 20]])
+            assert tap["holes"] == 1 and ("note" in tap or "rebuild" not in tap)
+            before = len((await c.call("list_features"))["features"])
+            assert "nearest face" in await c.fails("hole", size="Ø6.6", fastener="drill", positions=[[20, 0, 10], [40, 40, 40]])
+            assert len((await c.call("list_features"))["features"]) == before
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

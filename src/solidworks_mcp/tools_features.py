@@ -480,10 +480,52 @@ def _placement_sketch(feat: Any) -> tuple[Any, Any]:
     raise SwError("Could not find the hole position sketch to place the holes exactly.")
 
 
+def _place_on_curved(doc: Any, feat: Any, sub: Any, sk: Any, p: list[float], raw: list[float], standard: str, fname: str) -> dict:
+    """Move the 3D placement point of a hole on a curved face to `p` and check the hole is drilled there,
+    square to the surface."""
+    C = SW.C
+    doc.ClearSelection2(True)
+    sub.Select2(False, 0)
+    doc.EditSketch()
+    sm = doc.SketchManager
+    sm.AddToDB = True
+    try:
+        SW.cast(sk.GetSketchPoints2()[0], "ISketchPoint").SetCoords(*p)
+    finally:
+        sm.AddToDB = False
+        sm.InsertSketch(True)
+    doc.EditRebuild3()
+    placed = False
+    for f in g.faces(doc):
+        ff = f.GetFeature()
+        surf = SW.cast(f.GetSurface(), "ISurface")
+        if ff is None or SW.cast(ff, "IFeature").Name != feat.Name or not surf.IsCylinder():
+            continue
+        cp = list(surf.CylinderParams)
+        o, a = cp[0:3], cp[3:6]
+        d = [p[i] - o[i] for i in range(3)]
+        t = sum(d[i] * a[i] for i in range(3))
+        if math.dist(p, [o[i] + a[i] * t for i in range(3)]) < 1e-5:
+            placed = True
+            break
+    if not placed:
+        doc.ClearSelection2(True)
+        feat.Select2(False, 0)
+        doc.Extension.DeleteSelection2(C.swDelete_Absorbed)
+        raise SwError(f"The hole at {raw} did not end up on that point of the curved face. Nothing was created.")
+    out = result(doc, feat, "hole")
+    out["holes"] = 1
+    out["table"] = f"{standard}/{fname}"
+    if str(out.get("rebuild", "")).startswith("warning") and fname in ("tapped", "bottoming_tapped"):
+        out["note"] = ("SolidWorks flags tapped holes that start on a curved face with a rebuild warning; the hole is cut "
+                       "square to the surface. Spot-face the boss (a counterbore) if the thread start must be flat.")
+    return out
+
+
 @tool(WRITES)
 def hole(
     size: Annotated[str, Field(description="Fastener or drill size from the Hole Wizard tables, e.g. 'M6', 'M5', '#10', '1/4', '1/4-20', 'Ø6.6'.")],
-    positions: Annotated[list[list[float]], Field(description="Hole centres [[x, y, z], ...] in model mm on planar faces; positions on different faces give one hole feature per face. Placed exactly.")],
+    positions: Annotated[list[list[float]], Field(description="Hole centres [[x, y, z], ...] in model mm on planar or curved faces (radial holes in tubes and shafts are drilled square to the surface); positions on different faces, and each position on a curved face, give their own hole feature. Placed exactly.")],
     kind: Annotated[Literal["simple", "counterbore", "countersink", "tapped"], Field(description="Hole type.")] = "simple",
     standard: Annotated[Literal["iso", "ansi_metric", "ansi_inch"], Field(description="Hole standard.")] = "iso",
     fastener: Annotated[str | None, Field(description="Fastener/hole table. Defaults: simple=clearance, counterbore=socket_head, countersink=flat_head, tapped=tapped. Others: drill, tap_drill, dowel, hex_bolt, bottoming_tapped; ansi_inch also number_drill, letter_drill, all_drill, flat_head_100 (100 degree aerospace countersink).")] = None,
@@ -510,34 +552,35 @@ def hole(
     std = getattr(C, _STANDARD[standard])
     htype = getattr(C, _HOLE_TYPE[kind])
     end_t = C.swEndCondBlind if depth else C.swEndCondThroughAll
-    if not face:
-        # positions on several faces: one Hole Wizard feature per face
-        groups: list[tuple[Any, list[list[float]]]] = []
-        for raw in positions:
-            fobj = g.resolve(doc, "face@{},{},{}".format(*raw)).obj
-            for gf, members in groups:
-                if SW.app.IsSame(gf, fobj) == 1:
-                    members.append(raw)
-                    break
-            else:
-                groups.append((fobj, [raw]))
-        if len(groups) > 1:
-            done: list[dict] = []
-            try:
-                for _, members in groups:
-                    done.append(hole(size, members, kind, standard, fastener, None, depth, thread_depth, fit, cosmetic_thread))
-            except SwError:
-                # all or nothing: remove the hole features already made for earlier faces
-                for d in reversed(done):
-                    f = g.feature_by_name(doc, d["feature"])
-                    if f is not None:
-                        doc.ClearSelection2(True)
-                        f.Select2(False, 0)
-                        doc.Extension.DeleteSelection2(C.swDelete_Absorbed)
-                doc.ClearSelection2(True)
-                raise
-            return {"features": [d["feature"] for d in done], "holes": sum(d["holes"] for d in done), "faces": len(groups),
-                    "table": done[0]["table"], "volume_mm3": done[-1].get("volume_mm3")}
+    # one Hole Wizard feature per planar face, and per hole on a curved face (its placement is a 3D sketch
+    # point bound to the surface, so points added to it drill nothing)
+    groups: list[tuple[Any, list[list[float]]]] = []
+    for raw in positions:
+        fobj = g.resolve(doc, face if face else "face@{},{},{}".format(*raw)).obj
+        curved = not SW.cast(fobj.GetSurface(), "ISurface").IsPlane() if hasattr(fobj, "GetSurface") else False
+        for gf, members in groups:
+            if not curved and SW.app.IsSame(gf, fobj) == 1:
+                members.append(raw)
+                break
+        else:
+            groups.append((fobj, [raw]))
+    if len(groups) > 1:
+        done: list[dict] = []
+        try:
+            for _, members in groups:
+                done.append(hole(size, members, kind, standard, fastener, face, depth, thread_depth, fit, cosmetic_thread))
+        except SwError:
+            # all or nothing: remove the hole features already made for earlier faces
+            for d in reversed(done):
+                f = g.feature_by_name(doc, d["feature"])
+                if f is not None:
+                    doc.ClearSelection2(True)
+                    f.Select2(False, 0)
+                    doc.Extension.DeleteSelection2(C.swDelete_Absorbed)
+            doc.ClearSelection2(True)
+            raise
+        return {"features": [d["feature"] for d in done], "holes": sum(d["holes"] for d in done), "faces": len(groups),
+                "table": done[0]["table"], "volume_mm3": done[-1].get("volume_mm3")}
     # face under the first point (Hole Wizard places the hole at the selection point, then we fix it)
     face_ref = g.resolve(doc, face) if face else g.resolve(doc, "face@{},{},{}".format(*positions[0]))
     if face_ref.kind != "face":
@@ -590,6 +633,8 @@ def hole(
     feat = SW.cast(feat, "IFeature")
     # exact positions: move the first point, add the rest
     sub, sk = _placement_sketch(feat)
+    if sk.Is3D():  # a curved face: the single placement point moves in model coordinates
+        return _place_on_curved(doc, feat, sub, sk, pts[0], positions[0], standard, fname)
     frame = SketchFrame(sk)
     off_plane = [raw for p, raw in zip(pts, positions) if abs(frame.to_sketch(p)[2]) > 1e-6]
     if off_plane:
