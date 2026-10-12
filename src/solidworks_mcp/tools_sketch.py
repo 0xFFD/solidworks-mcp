@@ -12,7 +12,7 @@ from . import geometry as g
 from . import shapes
 from .com import SW, const_name, mm, to_mm
 from .errors import SwError
-from .registry import READ_ONLY, WRITES, tool
+from .registry import READ_ONLY, WRITES, app, tool
 
 STATUS = {1: "unknown", 2: "under_defined", 3: "fully_defined", 4: "over_defined", 5: "no_solution", 6: "invalid_solution", 7: "autosolve_off"}
 
@@ -760,6 +760,46 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
         got = [pt.X, pt.Y, pt.Z]
         if not ok or math.dist(got, q) > 1e-7:
             raise SwError(f"SolidWorks could not put the point at {to}; relations or dimensions may hold it (it is at {[round(to_mm(c), 4) for c in got]}).")
+    elif kind == "spline_tangent":
+        at, angle = op.get("at"), op.get("angle")
+        if len(items) != 1 or not at or angle is None:
+            raise SwError("spline_tangent needs one spline (items:['seg@x,y']), at:[x, y] (one of its fit points) and angle (degrees from sketch x).")
+        seg = SW.cast(_sketch_item(sk, items[0]), "ISketchSegment")
+        if seg.GetType() != C.swSketchSPLINE:
+            raise SwError(f"{items[0]} is not a spline.")
+        sp = SW.cast(seg, "ISketchSpline")
+        q = [mm(c) for c in at] + [0.0] * (3 - len(at))
+        handles = SW.cast_all(sp.GetSplineHandles(), "ISplineHandle")
+        h = min(handles, key=lambda x: math.dist([x.X, x.Y, x.Z], q)) if handles else None
+        if h is None or math.dist([h.X, h.Y, h.Z], q) > 1e-5:
+            raise SwError(f"{at} is not a fit point of that spline; use list_sketch for its points.")
+        h.TangentDriving = True
+        h.TangentRadialDirection = math.radians(float(angle))
+        if op.get("weight") is not None:
+            h.SetTangentMagnitude(float(op["weight"]), 0)
+        curve = SW.cast(seg.GetCurve(), "ICurve")
+        on = curve.GetClosestPointOn(*q)
+        d = list(curve.Evaluate2(on[3], 1))[3:5]
+        got = math.degrees(math.atan2(d[1], d[0]))
+        if min(abs((got - float(angle) + 180) % 360 - 180), abs((got - float(angle)) % 360 - 180)) > 0.01:
+            raise SwError(f"SolidWorks did not set the tangent (it is {got:.2f} deg).")
+        out["tangent_deg"] = round(got, 3)
+    elif kind == "picture":
+        file, at, width = op.get("file"), op.get("at") or [0, 0], op.get("width")
+        if not file or not width:
+            raise SwError("picture needs file (a PNG, JPG or BMP), at:[x, y] (lower-left corner) and width (mm; the height keeps the aspect ratio).")
+        path = app().path(file, must_exist=True, suffixes=(".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"))
+        pic = sm.InsertSketchPicture2(str(path), True)
+        if pic is None:
+            raise SwError(f"SolidWorks could not insert the picture {path.name}.")
+        pic = SW.cast(pic, "ISketchPicture")
+        w0, h0 = pic.GetSize(0.0, 0.0)[:2]
+        h_mm = mm(width) * (h0 / w0) if w0 else mm(width)
+        pic.SetSize(mm(width), h_mm, True)
+        pic.SetOrigin(mm(at[0]), mm(at[1]))
+        out["picture"] = path.name
+        out["size_mm"] = [round(to_mm(c), 3) for c in pic.GetSize(0.0, 0.0)[:2]]
+        out["origin_mm"] = [round(to_mm(c), 3) for c in pic.GetOrigin(0.0, 0.0)[:2]]
     elif kind == "spline_insert":
         at = op.get("at")
         if len(items) != 1 or not at:
@@ -791,6 +831,11 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
                 raise SwError(f"SolidWorks could not place a block instance at {at}.")
         out["block"] = SW.cast(defn.GetFeature(), "IFeature").Name if defn.GetFeature() is not None else None
         out["instances"] = defn.GetInstanceCount()
+        if op.get("save_as"):
+            target = app().path(str(op["save_as"]), suffixes=(".sldblk",))
+            if not defn.Save(str(target)) or not target.exists():
+                raise SwError(f"SolidWorks could not save the block to {target}.")
+            out["saved"] = str(target)
     elif kind == "rotate":
         c = op.get("center") or [0, 0]
         _select_items(doc, sk, items)
@@ -896,7 +941,7 @@ def _op(doc: Any, sk: Any, op: dict) -> dict:
     elif kind == "dimension":
         out.update(_dimension(doc, sk, op, items, to_model))
     else:
-        raise SwError(f"Unknown sketch operation '{kind}'. Use delete, move, copy, rotate, block, set_point, spline_insert, trim, extend, split, pattern, offset, convert, fillet, chamfer, "
+        raise SwError(f"Unknown sketch operation '{kind}'. Use delete, move, copy, rotate, block, set_point, spline_insert, spline_tangent, picture, trim, extend, split, pattern, offset, convert, fillet, chamfer, "
                       "construction, relation or dimension.")
     doc.ClearSelection2(True)
     change = len(_segments(sk)) - n
@@ -923,8 +968,10 @@ def modify_sketch(
         "{op:'offset', items (sketch segments or model edges/faces), distance (mm; the sign picks the side), both_sides, chain}, "
         "{op:'convert', refs:['edge@x,y,z' | 'face:N', ...]} (project model edges into the sketch), "
         "{op:'fillet', items:['pt@x,y'], radius}, {op:'chamfer', items:['pt@x,y'], distance}, "
-        "{op:'block', items, base:[x, y], copies:[[x, y], ...], angle} (make a sketch block and place copies with their base point "
-        "at each point, rotated by angle), {op:'set_point', items:['pt@x,y'], to:[x, y]} (put a point at exact coordinates; a spline fit point reshapes the spline "
+        "{op:'block', items, base:[x, y], copies:[[x, y], ...], angle, save_as:'name.sldblk'} (make a sketch block and place copies "
+        "with their base point at each point, rotated by angle; optionally save it as a block file), "
+        "{op:'spline_tangent', items:['seg@x,y'], at:[x, y] (a fit point), angle (deg from sketch x), weight}, "
+        "{op:'picture', file, at:[x, y] (lower-left), width (mm)} (a reference image to trace, e.g. a legacy drawing), {op:'set_point', items:['pt@x,y'], to:[x, y]} (put a point at exact coordinates; a spline fit point reshapes the spline "
         "through it), {op:'spline_insert', items:['seg@x,y'], at:[x, y]} (add a fit point on a spline), "
         "{op:'construction', items, on}, "
         "{op:'relation', type, items} (types: " + ", ".join(RELATIONS) + "), "

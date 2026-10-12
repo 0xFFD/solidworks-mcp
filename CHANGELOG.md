@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `modify_sketch` ops `spline_tangent` (tangent angle and weight at a fit point) and `picture` (a scaled reference
+  image for tracing legacy drawings), and `block` takes `save_as` to write a .sldblk file.
 - `annotation_views` lists a model's 3D annotation views and creates new ones facing a standard direction,
   moving chosen datums and feature control frames into them (MBD presentation).
 - `modify_sketch` op `block` makes a sketch block from items and places copies of it at given points.

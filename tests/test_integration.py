@@ -1028,6 +1028,14 @@ def test_spline_editing(tmp_path: Path):
             added = ins["done"][0]["inserted"]
             pts = sorted(tuple(p["at"]) for p in (await c.call("list_sketch"))["points"])
             assert (20.0, 25.0) in pts and tuple(added) in pts and len(pts) == 5
+            tan = await c.call("modify_sketch", operations=[{"op": "spline_tangent", "items": ["seg@40,5"], "at": [0, 0], "angle": 60, "weight": 1.5}])
+            assert tan["done"][0]["tangent_deg"] == pytest.approx(60)
+            assert "not a fit point" in await c.fails("modify_sketch", operations=[{"op": "spline_tangent", "items": ["seg@40,5"], "at": [5, 5], "angle": 0}])
+            # a reference image to trace (a scanned legacy drawing), scaled to 120 mm wide
+            from PIL import Image
+            Image.new("RGB", (400, 200), "white").save(tmp_path / "scan.png")
+            pic = await c.call("modify_sketch", operations=[{"op": "picture", "file": "scan.png", "at": [0, -80], "width": 120}])
+            assert pic["done"][0]["size_mm"] == pytest.approx([120, 60]) and pic["done"][0]["origin_mm"] == pytest.approx([0, -80])
         finally:
             await c.call("close_document")
         # a sketch block (a cutout with its hole) placed twice more, then extruded
@@ -1036,8 +1044,8 @@ def test_spline_editing(tmp_path: Path):
             await c.call("start_sketch", on="plane:Top")
             await c.call("sketch", entities=[{"type": "rectangle", "corner1": [0, 0], "corner2": [20, 10]}, {"type": "circle", "center": [10, 5], "diameter": 4}])
             blk = await c.call("modify_sketch", operations=[{"op": "block", "items": ["seg@10,0", "seg@20,5", "seg@10,10", "seg@0,5", "seg@12,5"],
-                                                              "base": [0, 0], "copies": [[40, 0], [80, 20]]}])
-            assert blk["done"][0]["instances"] == 3
+                                                              "base": [0, 0], "copies": [[40, 0], [80, 20]], "save_as": "cutout.sldblk"}])
+            assert blk["done"][0]["instances"] == 3 and (tmp_path / "cutout.sldblk").exists()
             await c.call("finish_sketch")
             assert (await c.call("extrude", depth=5))["volume_mm3"] == pytest.approx(3 * (200 - math.pi * 4) * 5)
             assert (await c.call("bounding_box"))["size"] == pytest.approx([100, 5, 30])
