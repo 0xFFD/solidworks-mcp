@@ -322,21 +322,46 @@ def _fit_top_right(view: Any, w: float, h: float, margin: float = 0.015) -> None
         pass
 
 
+def _first_gap(spans: list[tuple[float, float]], start: float, size: float, limit: float, gap: float) -> float | None:
+    """Lowest position >= start where [pos, pos + size] clears every span (with gap) and ends before limit."""
+    pos = start
+    for a, b in sorted(spans):
+        if b + gap <= pos:
+            continue
+        if pos + size + gap <= a:
+            break
+        pos = max(pos, b + gap)
+    return pos if pos + size <= limit else None
+
+
 def _place_beside(view: Any, drw: Any, parent: str, direction: str, gap: float = 0.012) -> None:
-    """Put a section view in free space: right of every view in the parent's row (vertical cut) or
-    below every view in the parent's column (horizontal cut)."""
+    """Put a section view in free space on the sheet, aligned with its parent: in the parent's row for a
+    vertical cut (right of the parent, else left), in its column for a horizontal cut (below, else above)."""
     try:
         own = view.Name
         x0, y0, x1, y1 = _outline(view)
-        others = [v for v in _views(drw) if v["name"] != own]
-        par = next(v for v in others if v["name"] == parent)
-        px0, py0, px1, py1 = (mm(c) for c in par["outline_mm"])
+        w, h = _sheet_size(drw)
+        margin = 0.01
+        others = [[mm(c) for c in v["outline_mm"]] for v in _views(drw) if v["name"] != own]
+        par = [mm(c) for c in next(v for v in _views(drw) if v["name"] == parent)["outline_mm"]]
         if direction == "vertical":
-            row = [mm(v["outline_mm"][2]) for v in others if mm(v["outline_mm"][1]) < py1 and mm(v["outline_mm"][3]) > py0]
-            _move_outline(view, left=max(row) + gap)
+            row = [(o[0], o[2]) for o in others if o[1] < y1 and o[3] > y0]
+            pos = _first_gap(row, par[2] + gap, x1 - x0, w - margin, gap)
+            if pos is not None:
+                _move_outline(view, left=pos)
+            else:  # mirror the search to the left of the parent
+                mirrored = [(w - b, w - a) for a, b in row]
+                pos = _first_gap(mirrored, w - par[0] + gap, x1 - x0, w - margin, gap)
+                _move_outline(view, right=w - pos) if pos is not None else _move_outline(view, left=max(b for _, b in row) + gap)
         else:
-            col = [mm(v["outline_mm"][1]) for v in others if mm(v["outline_mm"][0]) < px1 and mm(v["outline_mm"][2]) > px0]
-            _move_outline(view, top=min(col) - gap)
+            col = [(h - o[3], h - o[1]) for o in others if o[0] < x1 and o[2] > x0]  # measured downwards from the top
+            pos = _first_gap(col, h - par[1] + gap, y1 - y0, h - margin, gap)
+            if pos is not None:
+                _move_outline(view, top=h - pos)
+            else:
+                up = [(o[1], o[3]) for o in others if o[0] < x1 and o[2] > x0]
+                pos = _first_gap(up, par[3] + gap, y1 - y0, h - margin, gap)
+                _move_outline(view, bottom=pos) if pos is not None else _move_outline(view, top=min(o[1] for o in others) - gap)
     except Exception:
         pass
 
@@ -468,7 +493,7 @@ def section_view(
     if sv is None:
         raise SwError("SolidWorks could not create the section view (does the line cross the part?).")
     sv = SW.cast(sv, "IView")
-    _place_beside(sv, drw, view, direction)
+    _place_beside(sv, drw, view, direction, gap=0.03)  # leave room for the parent view's dimensions
     o = [round(to_mm(c), 2) for c in _outline(sv)]
     doc.ForceRebuild3(True)
     hatched = sv.GetFaceHatchCount()

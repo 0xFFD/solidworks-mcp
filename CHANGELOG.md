@@ -54,6 +54,9 @@ All notable changes to this project are documented here. The format follows
 - `section_view` drew its cutting line in sheet coordinates inside the view's own sketch, so the line
   landed beside the part and the section showed no cut. It now cuts where asked.
 - `create_drawing(model=...)` failed when the model was not open; it is now loaded first.
+- Section views are placed in the first free gap beside their parent view inside the sheet, clear of its
+  dimensions, instead of after the last view in the row (which could push them off the sheet). The bracket
+  drawing in the README was regenerated with the corrected section.
 - Features created in sheet metal parts were not found after creation (the flat pattern stays last in
   the tree), which made `ref_plane`, `shell`, `ref_axis` and `loft` report failure there.
 

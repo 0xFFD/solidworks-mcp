@@ -244,3 +244,14 @@ def test_sketch_references():
     assert _SEG_RE.match("SEG@4,5") is not None
     for bad in ("seg", "seg:", "seg@1", "face@1,2,3", "pt:1.5"):
         assert _SEG_RE.match(bad) is None, bad
+
+
+def test_view_gap_search():
+    from solidworks_mcp.tools_drawing import _first_gap
+
+    # room between the parent's right edge (0.16) and the next view at 0.30
+    assert _first_gap([(0.03, 0.16), (0.30, 0.41)], 0.172, 0.06, 0.41, 0.012) == pytest.approx(0.172)
+    # the row is full up to the sheet limit: no place
+    assert _first_gap([(0.03, 0.16), (0.17, 0.41)], 0.172, 0.06, 0.41, 0.012) is None
+    # a view in the way is skipped
+    assert _first_gap([(0.18, 0.20)], 0.172, 0.06, 0.41, 0.012) == pytest.approx(0.212)
