@@ -188,3 +188,14 @@ def test_tolerance_stack_worst_case_and_rss():
     assert r["worst_case"] == pytest.approx((0.15, 0.45))  # tightest: 50 - 20.05 - 29.8; loosest: 50.1 - 19.95 - 29.7
     half = math.sqrt(0.05 ** 2 + 0.05 ** 2 + 0.05 ** 2)
     assert r["rss"] == pytest.approx((0.3 - half, 0.3 + half))
+
+
+def test_order_chain():
+    # an arc a->b, then a line given backwards c->b, then a line c->d
+    ends = [((0, 0), (1, 0)), ((2, 0), (1, 0)), ((2, 0), (3, 1))]
+    assert shapes.order_chain(ends) == [(0, False), (1, True), (2, False)]
+    assert shapes.order_chain([((5, 5), (6, 6))]) == [(0, False)]
+    with pytest.raises(SwError):
+        shapes.order_chain([((0, 0), (1, 0)), ((5, 5), (6, 6))])  # two separate pieces
+    with pytest.raises(SwError):
+        shapes.order_chain([((0, 0), (1, 0)), ((1, 0), (2, 0)), ((1, 0), (1, 1))])  # a branch

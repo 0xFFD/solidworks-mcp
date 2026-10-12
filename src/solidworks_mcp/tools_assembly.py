@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from . import geometry as g
+from . import shapes
 from .com import SW, const_name, doc_kind, mm, rad, to_mm
 from .errors import SwError
 from .registry import READ_ONLY, WRITES, app, tool
@@ -177,6 +178,55 @@ def _advanced_mate(doc, asm, type: str, refs: list[str], distance: float, angle:
             SW.cast(dim, "IDimension").SetSystemValue3(mm(distance), C.swSetValue_InAllConfigurations, None)
 
 
+def _segment_points(seg: Any) -> list[list[float]]:
+    """Points along a sketch segment from its start to its end (the curve itself is unbounded)."""
+    from .tools_features import _doubles
+
+    t = seg.GetType()
+    if t == SW.C.swSketchSPLINE:
+        pts = SW.cast_all(SW.cast(seg, "ISketchSpline").GetPoints2(), "ISketchPoint")
+        a, b = pts[0], pts[-1]
+    else:
+        x = SW.cast(seg, "ISketchArc" if t == SW.C.swSketchARC else "ISketchLine")
+        a, b = SW.cast(x.GetStartPoint2(), "ISketchPoint"), SW.cast(x.GetEndPoint2(), "ISketchPoint")
+    a, b = [a.X, a.Y, a.Z], [b.X, b.Y, b.Z]
+    tp = list(SW.cast(seg.GetCurve(), "ICurve").GetTessPts(1e-5, 5e-4, _doubles(a), _doubles(b)) or [])
+    return [tp[i:i + 3] for i in range(0, len(tp), 3)] or [a, b]
+
+
+def _chain_spline(doc: Any, segs: list[Any]) -> tuple[Any, float, str]:
+    """A 3D sketch spline through a chain of sketch curves, resampled every 0.5 mm; returns it, its largest
+    deviation from the chain (mm) and the new sketch's name."""
+    from .tools_features import _doubles
+    from .tools_sketch import sketch_name
+
+    pieces = [_segment_points(s) for s in segs]
+    order = shapes.order_chain([(tuple(p[0]), tuple(p[-1])) for p in pieces], tol=1e-7)
+    chain: list[list[float]] = []
+    for i, rev in order:
+        pts = pieces[i][::-1] if rev else pieces[i]
+        chain += pts if not chain else pts[1:]
+    dense = [chain[0]]
+    for a, b in zip(chain, chain[1:]):
+        n = max(1, int(math.dist(a, b) / 0.0005))
+        dense += [[a[k] + (b[k] - a[k]) * j / n for k in range(3)] for j in range(1, n + 1)]
+    sm = doc.SketchManager
+    sm.Insert3DSketch(True)
+    sm.AddToDB = True
+    try:
+        spline = sm.CreateSpline2(_doubles([c for p in dense for c in p]), True)
+    finally:
+        sm.AddToDB = False
+    name = sketch_name(doc, SW.cast(sm.ActiveSketch, "ISketch"))
+    sm.Insert3DSketch(True)
+    if spline is None:
+        raise SwError("Could not fit a spline along the path.")
+    spline = SW.cast(spline, "ISketchSegment")
+    curve = SW.cast(spline.GetCurve(), "ICurve")
+    dev = max(math.dist(p, list(curve.GetClosestPointOn(*p))[:3]) for q in pieces for p in q)
+    return spline, to_mm(dev), name
+
+
 def _path_mate(doc, asm, refs: list[str], orientation: str = "free") -> dict:
     """A path mate as a point-on-curve coincidence: SolidWorks' own path mate has no API (no path mate data in the
     type library, and AddMate5 makes nothing), but a vertex coincident with a curve follows it the same way."""
@@ -193,6 +243,7 @@ def _path_mate(doc, asm, refs: list[str], orientation: str = "free") -> dict:
         raise SwError(f"{m.group(1)} has no vertices to put on the path.")
     vtx = min(verts, key=lambda v: math.dist(xf.point(v.GetPoint()), target))
     path = refs[1].strip()
+    out_note: dict[str, Any] = {}
     doc.ClearSelection2(True)
     sel = SW.cast(doc.SelectionManager, "ISelectionMgr")
     data = SW.cast(sel.CreateSelectData(), "ISelectData")
@@ -205,8 +256,14 @@ def _path_mate(doc, asm, refs: list[str], orientation: str = "free") -> dict:
         if f is None or f.GetTypeName2() not in ("ProfileFeature", "3DProfileFeature"):
             raise SwError(f"{path} is not a sketch of the assembly.")
         segs = [x for x in SW.cast_all(SW.cast(f.GetSpecificFeature2(), "ISketch").GetSketchSegments(), "ISketchSegment") if not x.ConstructionGeometry]
-        if len(segs) != 1:
-            raise SwError(f"{path} must hold exactly one line, arc or spline (it has {len(segs)}); join a chain into one spline.")
+        if not segs:
+            raise SwError(f"{path} holds no curves.")
+        if len(segs) > 1:  # a chain: one spline fitted closely through it, since a point-on-curve mate takes one curve
+            doc.ClearSelection2(True)
+            curve, deviation, fitted = _chain_spline(doc, segs)
+            out_note = {"path_fitted": fitted, "fit_deviation_mm": round(deviation, 5)}
+            SW.cast(vtx, "IEntity").Select4(True, data)
+            segs = [curve]
         data2 = SW.cast(sel.CreateSelectData(), "ISelectData")
         data2.Mark = 1
         segs[0].Select4(True, data2)
@@ -218,6 +275,7 @@ def _path_mate(doc, asm, refs: list[str], orientation: str = "free") -> dict:
         raise SwError(f"SolidWorks could not put the vertex on the path ({const_name('swAddMateError_', err)}).")
     doc.EditRebuild3()
     out: dict[str, Any] = {"mate": _last_mate(doc), "type": "path"}
+    out.update(out_note)
     if orientation == "fixed":
         # lock pitch, yaw and roll: two planar faces of the component parallel to the assembly planes they face now
         planes = {0: "plane:Right", 1: "plane:Top", 2: "plane:Front"}

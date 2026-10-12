@@ -340,3 +340,34 @@ def tolerance_stack(contributors: list[tuple[float, float, float, int]]) -> dict
     wc = sum(halves)
     rss = math.sqrt(sum(h * h for h in halves))
     return {"nominal": nominal, "mean": mean, "worst_case": (mean - wc, mean + wc), "rss": (mean - rss, mean + rss)}
+
+
+def order_chain(ends: list[tuple[tuple[float, ...], tuple[float, ...]]], tol: float = 1e-6) -> list[tuple[int, bool]]:
+    """Order segments given by (start, end) points into one open chain: [(index, reversed), ...] from one free end
+    to the other. Raises SwError if they do not form a single chain without branches."""
+    n = len(ends)
+    if n == 0:
+        raise SwError("No segments to chain.")
+
+    def same(p, q):
+        return math.dist(p, q) <= tol
+
+    def degree(p):
+        return sum(same(p, e[0]) for e in ends) + sum(same(p, e[1]) for e in ends)
+
+    free = [(i, k) for i, e in enumerate(ends) for k in (0, 1) if degree(e[k]) == 1]
+    if any(degree(e[k]) > 2 for e in ends for k in (0, 1)):
+        raise SwError("The path branches; give one chain of curves.")
+    i, k = free[0] if free else (0, 0)  # a closed loop starts anywhere
+    out, used = [], set()
+    while True:
+        out.append((i, k == 1))
+        used.add(i)
+        tail = ends[i][1 - k]
+        nxt = next(((j, kk) for j, e in enumerate(ends) if j not in used for kk in (0, 1) if same(e[kk], tail)), None)
+        if nxt is None:
+            break
+        i, k = nxt
+    if len(out) != n:
+        raise SwError("The path's curves are not connected end to end.")
+    return out

@@ -656,6 +656,15 @@ def test_advanced_mates_and_explode(tmp_path: Path):
             assert len(pm["orientation_mates"]) == 2  # pitch, yaw and roll held by two parallel mates
             x, y, z = pm["vertex_at_mm"]
             assert math.hypot(x, y - 600) == pytest.approx(50, abs=1e-3) and z == pytest.approx(0, abs=1e-3)
+            # a track of a straight run and a bend: the chain is fitted with one spline and the corner rides it
+            await c.call("insert_component", path="slider.sldprt", position=[-40, 870, 10])
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "line", "from": [-80, 850], "to": [0, 850]},
+                                             {"type": "arc", "center": [0, 800], "start": [50, 800], "end": [0, 850]}])
+            chain = (await c.call("finish_sketch"))["sketch"]
+            cm = await c.call("add_mate", type="path", refs=["vertex@slider-4/-40,870,10", f"sketch:{chain}"], path_orientation="fixed")
+            cx, cy, cz = cm["vertex_at_mm"]
+            assert cm["fit_deviation_mm"] < 0.01 and cy == pytest.approx(850, abs=1e-3) and cz == pytest.approx(0, abs=1e-3) and -80 <= cx <= 0
             # GD&T on assembly components, including one that is not at the origin
             assert (await c.call("add_datum_target", face="face@slotplate-1/-30,-25,10", at=[-30, -25, 10], label="C1"))["datum_target"] == "C1"
             await c.call("add_datum", face="face@rail-1/0,0,0", label="A")
