@@ -666,6 +666,11 @@ def test_gdt_and_fillets(tmp_path: Path):
                                  between=["X", "Y"]))["between"] == ["X", "Y"]
             uz = await c.call("add_geometric_tolerance", face="face@40,5,12", characteristic="profile_surface", tolerance=0.4, unequal=0.1, datums=["A"])
             assert uz["feature_control_frame"] == "|profile_surface|0.4(U)0.1|A"
+            frames = [a for v in (await c.call("annotation_views"))["views"] for a in v["annotations"] if a["kind"] == "feature_control_frame"]
+            pick = next(a["name"] for a in frames if a.get("text", "").startswith("0.4"))
+            av = await c.call("annotation_views", action="create", direction="right", annotations=[pick])
+            assert av["annotations"] == [pick] and any(v["annotations"] and v["annotations"][0]["name"] == pick for v in av["views"])
+            assert "No annotation named" in await c.fails("annotation_views", action="create", direction="top", annotations=["Nope1"])
             assert "between 0 and the tolerance" in await c.fails("add_geometric_tolerance", face="face@40,5,12", characteristic="profile_surface",
                                                                   tolerance=0.1, unequal=0.2)
             assert "apply to profile" in await c.fails("add_geometric_tolerance", face="face@10,10,0", characteristic="flatness", tolerance=0.05, applies_to="all_over")

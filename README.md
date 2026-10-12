@@ -115,11 +115,11 @@ All lengths are millimetres and all angles degrees, in both directions, whatever
 | Model tree and edits | `list_features`, `dimensions`, `set_dimensions`, `edit_feature` (end conditions, depths, directions, radii, thickness, pattern counts, hole sizes, draft angles, sweep diameters), `configurations`, `equations`, `feature_action` (suppress, unsuppress, delete; per configuration), `undo`, `rebuild` |
 | Geometry and checks | `list_faces`, `list_edges`, `measure`, `mass_properties`, `bounding_box`, `check_geometry`, `tolerance_stack` (worst case and RSS), `screenshot` |
 | Engineering data | `list_materials`, `set_material`, `custom_properties` |
-| GD&T | `add_datum`, `add_datum_target`, `add_geometric_tolerance` (incl. composite frames and projected zones), `dimxpert` (automatic MBD scheme), `add_surface_finish`, `add_note` |
+| GD&T | `add_datum`, `add_datum_target`, `add_geometric_tolerance` (incl. composite frames and projected zones), `dimxpert` (automatic MBD scheme), `annotation_views` (3D annotation views), `add_surface_finish`, `add_note` |
 | Drawings | `create_drawing`, `drawing_views`, `section_view`, `detail_view`, `projected_view`, `auxiliary_view`, `broken_view`, `breakout_section`, `add_view` (model or flat pattern), `sheets`, `drawing_dimension`, `view_dimensions` (list, arrange, move, tolerance, precision), `drawing_table` (BOM with balloons, revision block, hole table) |
 | Assemblies | `insert_component`, `list_components`, `add_mate` (including limit, width, symmetric, gear, slot, hinge, rack and pinion, screw, universal joint and cam mates), `exploded_view`, `subassembly` (form, dissolve), `interference_check`, `bom` (parts list with mass budget) |
 
-99 tools and one prompt (`design`) in total. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`) so clients can approve reads automatically and ask before deleting or closing.
+100 tools and one prompt (`design`) in total. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`) so clients can approve reads automatically and ask before deleting or closing.
 
 ### Picking faces and edges
 
@@ -167,7 +167,7 @@ Copy the log to write-once storage if you need it to survive a determined admini
 
 **Read-only mode.** `--read-only` allows only the tools that do not change models or files, for design reviews and audits.
 
-**No code execution.** There is no tool that runs macros, scripts or arbitrary API calls. Everything the agent can do is one of the 99 tools above.
+**No code execution.** There is no tool that runs macros, scripts or arbitrary API calls. Everything the agent can do is one of the 100 tools above.
 
 **Engineering standards.** `document_settings` switches between ASME Y14.5 and ISO drafting standards, `create_drawing` supports third and first angle projection, GD&T is applied to model faces (model-based definition), holes come from the standard Hole Wizard tables rather than hand-drawn circles, `finish_sketch(fully_define=true)` produces fully defined sketches, and `check_geometry` runs the SolidWorks body check before release.
 
@@ -186,7 +186,7 @@ The tools cover the common path from a blank part to a released drawing. Plenty 
 - **Imported geometry.** `import_file` brings STEP, IGES and Parasolid models in as dumb solids: there is no feature recognition, so imported parts can be referenced, measured, mated, cut, split, patterned and converted to sheet metal, but not edited by dimension or by moving their faces.
 - **Design judgement.** The guide gives rules of thumb and a worked recipe, not analysis. Strength, vibration, thermal and airworthiness decisions stay with engineers.
 - **Drawings beyond the basics.** `view_dimensions(arrange=true)` stacks linear dimensions in rows around their view within the free space, but leaves diameter and radius leaders, datum symbols and feature control frames where SolidWorks put them, and the title block is filled only through custom properties. Tables placed without a position can overlap views and need moving. Reference dimensions and auxiliary views in assembly drawings need component references (`edge@Part-1/x,y,z`) and have only been tested on parts.
-- **Advanced GD&T and MBD.** DimXpert schemes take their tolerance values from the document's DimXpert options and cannot be edited annotation by annotation. `tolerance_stack` adds up one-dimensional chains (worst case and RSS) but not 3D or GD&T-based stacks, and there are no 3D PMI views or annotation views, The unequally disposed profile modifier is drawn as text in the frame, so STEP carries it graphically rather than as semantic PMI.
+- **Advanced GD&T and MBD.** DimXpert schemes take their tolerance values from the document's DimXpert options and cannot be edited annotation by annotation. `tolerance_stack` adds up one-dimensional chains (worst case and RSS) but not 3D or GD&T-based stacks, annotation views group annotations by viewing direction but cannot be named or set to section views, The unequally disposed profile modifier is drawn as text in the frame, so STEP carries it graphically rather than as semantic PMI.
 - **Advanced assembly work.** Path mates and motion studies are not available, and sub-assemblies formed with `subassembly` stay inside the parent file (virtual) until saved out in SolidWorks. Explode steps move and rotate about the assembly X, Y and Z axes, and radial steps move a ring of parts out from its own centre axis.
 - **Analysis.** It cannot run SolidWorks Simulation, Flow Simulation, Costing or DFM checks. Mass properties, measurement, interference and the body check are the analysis tools available.
 - **Data management.** There is no SOLIDWORKS PDM or vault access, check-in, revision workflow or ECO handling.

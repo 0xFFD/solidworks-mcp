@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `annotation_views` lists a model's 3D annotation views and creates new ones facing a standard direction,
+  moving chosen datums and feature control frames into them (MBD presentation).
 - `modify_sketch` op `block` makes a sketch block from items and places copies of it at given points.
 - `edit_feature` edits lofts (replace, add or reorder profiles; close) and swaps a sweep's profile or path sketch.
 - `forming_tool` places design-library forming tools (dimples, embosses, flanged holes, louvres, lances, ribs)

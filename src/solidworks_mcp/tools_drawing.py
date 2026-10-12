@@ -322,6 +322,76 @@ def dimxpert(
     return {"features": part.GetFeatureCount(), "annotations": anns}
 
 
+_ANN_KINDS = {"swDatumTag": "datum", "swGTol": "feature_control_frame", "swSFSymbol": "surface_finish", "swNote": "note",
+              "swDisplayDimension": "dimension", "swDatumTargetSym": "datum_target", "swCThread": "cosmetic_thread"}
+_VIEW_DIRS = {"front": "swFrontView", "back": "swBackView", "left": "swLeftView", "right": "swRightView", "top": "swTopView", "bottom": "swBottomView"}
+
+
+def _annotation_row(a: Any) -> dict:
+    a = SW.cast(a, "IAnnotation")
+    t = a.GetType()
+    kind = next((v for k, v in _ANN_KINDS.items() if getattr(SW.C, k, None) == t), "other")
+    row: dict[str, Any] = {"name": a.GetName(), "kind": kind}
+    try:
+        if kind == "datum":
+            row["text"] = SW.cast(a.GetSpecificAnnotation(), "IDatumTag").GetLabel()
+        elif kind == "feature_control_frame":
+            vals = SW.cast(a.GetSpecificAnnotation(), "IGtol").GetFrameValues(1)
+            row["text"] = "|".join(str(x) for x in vals if x)
+    except Exception:
+        pass
+    return row
+
+
+@tool(WRITES)
+def annotation_views(
+    action: Annotated[Literal["list", "create"], Field(description="list the model's annotation views and what each holds; create one and move annotations into it.")] = "list",
+    direction: Annotated[Literal["front", "back", "left", "right", "top", "bottom"] | None, Field(description="create: the direction the view looks from.")] = None,
+    annotations: Annotated[list[str] | None, Field(description="create: annotation names to move into the new view (from list, e.g. 'DetailItem2').")] = None,
+) -> dict:
+    """3D annotation views for model-based definition: group the model's datums, feature control frames and
+    notes into views that each face one direction, so the annotations read flat to the viewer and carry into
+    3D PDF and STEP AP242 presentation."""
+    doc = SW.active()
+    if doc_kind(doc) == "drawing":
+        raise SwError("Annotation views belong to parts and assemblies.")
+    ext = doc.Extension
+
+    def views() -> list[dict]:
+        out = []
+        for i, v in enumerate(ext.AnnotationViews or []):
+            v = SW.cast(v, "IAnnotationView")
+            out.append({"index": i, "unassigned": bool(v.UnassignedView), "annotations": [_annotation_row(a) for a in (v.Annotations or [])]})
+        return out
+
+    if action == "list":
+        return {"views": views()}
+    if not direction:
+        raise SwError("create needs direction= (front, back, left, right, top or bottom).")
+    by_name = {}
+    a = doc.GetFirstAnnotation2()
+    while a is not None:
+        a = SW.cast(a, "IAnnotation")
+        by_name[a.GetName()] = a
+        a = a.GetNext3()
+    missing = [n for n in annotations or [] if n not in by_name]
+    if missing:
+        raise SwError(f"No annotation named {', '.join(missing)}. Annotations: {sorted(by_name)}")
+    from .tools_features import _dispatch_array
+
+    v = ext.InsertAnnotationView(getattr(SW.C, _VIEW_DIRS[direction]), None, False, None, 0)
+    if v is None:
+        raise SwError("SolidWorks could not create the annotation view.")
+    v = SW.cast(v, "IAnnotationView")
+    if annotations and not v.MoveAnnotations(_dispatch_array([by_name[n] for n in annotations])):
+        raise SwError("SolidWorks could not move the annotations into the new view (they must face that direction's plane).")
+    doc.GraphicsRedraw2()
+    held = sorted(SW.cast(x, "IAnnotation").GetName() for x in (v.Annotations or []))
+    if sorted(annotations or []) != held:
+        raise SwError(f"The new view holds {held} instead of {sorted(annotations or [])}.")
+    return {"direction": direction, "annotations": held, "views": views()}
+
+
 @tool(WRITES)
 def add_note(
     text: Annotated[str, Field(description="Note text. Use for general notes, e.g. 'UNLESS OTHERWISE SPECIFIED: BREAK SHARP EDGES 0.2-0.5'.")],
