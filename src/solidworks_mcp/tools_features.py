@@ -475,7 +475,7 @@ def _placement_sketch(feat: Any) -> tuple[Any, Any]:
 @tool(WRITES)
 def hole(
     size: Annotated[str, Field(description="Fastener or drill size from the Hole Wizard tables, e.g. 'M6', 'M5', '#10', '1/4', '1/4-20', 'Ø6.6'.")],
-    positions: Annotated[list[list[float]], Field(description="Hole centres [[x, y, z], ...] in model mm, all on the same planar face. Placed exactly.")],
+    positions: Annotated[list[list[float]], Field(description="Hole centres [[x, y, z], ...] in model mm on planar faces; positions on different faces give one hole feature per face. Placed exactly.")],
     kind: Annotated[Literal["simple", "counterbore", "countersink", "tapped"], Field(description="Hole type.")] = "simple",
     standard: Annotated[Literal["iso", "ansi_metric", "ansi_inch"], Field(description="Hole standard.")] = "iso",
     fastener: Annotated[str | None, Field(description="Fastener/hole table. Defaults: simple=clearance, counterbore=socket_head, countersink=flat_head, tapped=tapped. Others: drill, tap_drill, dowel, hex_bolt, bottoming_tapped; ansi_inch also number_drill, letter_drill, all_drill, flat_head_100 (100 degree aerospace countersink).")] = None,
@@ -502,6 +502,21 @@ def hole(
     std = getattr(C, _STANDARD[standard])
     htype = getattr(C, _HOLE_TYPE[kind])
     end_t = C.swEndCondBlind if depth else C.swEndCondThroughAll
+    if not face:
+        # positions on several faces: one Hole Wizard feature per face
+        groups: list[tuple[Any, list[list[float]]]] = []
+        for raw in positions:
+            fobj = g.resolve(doc, "face@{},{},{}".format(*raw)).obj
+            for gf, members in groups:
+                if SW.app.IsSame(gf, fobj) == 1:
+                    members.append(raw)
+                    break
+            else:
+                groups.append((fobj, [raw]))
+        if len(groups) > 1:
+            done = [hole(size, members, kind, standard, fastener, None, depth, thread_depth, fit, cosmetic_thread) for _, members in groups]
+            return {"features": [d["feature"] for d in done], "holes": sum(d["holes"] for d in done), "faces": len(groups),
+                    "table": done[0]["table"], "volume_mm3": done[-1].get("volume_mm3")}
     # face under the first point (Hole Wizard places the hole at the selection point, then we fix it)
     face_ref = g.resolve(doc, face) if face else g.resolve(doc, "face@{},{},{}".format(*positions[0]))
     if face_ref.kind != "face":

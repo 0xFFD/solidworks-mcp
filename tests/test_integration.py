@@ -253,9 +253,14 @@ def test_sketch_and_feature_editing(tmp_path: Path):
             # configurations: a variant without the hole
             await c.call("configurations", action="add", name="Blank")
             await c.call("feature_action", features=[cut["feature"]], action="suppress", configurations=["Blank"])
+            await c.call("custom_properties", set={"PartNo": "PLT-100-2"}, configuration="Blank")
+            await c.call("set_material", name="6061-T6 (SS)", configuration="Blank")
+            assert (await c.call("mass_properties"))["material"] == "6061-T6 (SS)"
             blank = (await c.call("mass_properties"))["volume_mm3"]
             await c.call("configurations", action="activate", name="Default")
-            assert blank > (await c.call("mass_properties"))["volume_mm3"]
+            default = await c.call("mass_properties")
+            assert blank > default["volume_mm3"] and default["material"] != "6061-T6 (SS)"
+            assert (await c.call("custom_properties", configuration="Blank"))["properties"]["PartNo"] == "PLT-100-2"
             await c.call("close_document")
 
             # spring: helix plus swept wire; 3D sketch sweep path
@@ -476,6 +481,8 @@ def test_gdt_and_fillets(tmp_path: Path):
             base = (await c.call("extrude", depth=10))["volume_mm3"]
             await c.call("hole", size="M5", kind="simple", positions=[[-30, 10, 15], [30, 10, 15]])
             await c.call("hole", size="M4", kind="tapped", positions=[[0, 10, -15]])
+            multi = await c.call("hole", size="M3", kind="tapped", depth=6, positions=[[40, 5, 0], [-40, 5, -10], [20, 5, 25]])
+            assert multi["faces"] == 3 and multi["holes"] == 3
             await c.call("add_datum", face="face@10,0,0", label="A")
             await c.call("add_datum", face="face@-40,5,0", label="B")
             await c.call("add_datum", face="face@0,5,25", label="C")

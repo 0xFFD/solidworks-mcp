@@ -14,7 +14,8 @@ All notable changes to this project are documented here. The format follows
   up to next), depths, second direction and flip side; revolve angle; fillet radius and edges; chamfer distance;
   shell thickness; pattern counts and spacing.
 - `configurations` lists, adds (including derived configurations), activates and deletes configurations, and
-  `set_dimensions` and `feature_action` take `configurations` to change only some of them.
+  `set_dimensions` and `feature_action` take `configurations` to change only some of them. With the existing
+  per-configuration `set_material` and `custom_properties` this gives dash-numbered part variants.
 - `helix` creates helices and spirals from a sketched circle and reports the start point and tangent, so a
   profile can be swept along it for springs, coils and modelled threads.
 - 3D sketches (`start_sketch(on="3d")`) with lines, polylines, splines and points in model coordinates, for
@@ -45,6 +46,7 @@ All notable changes to this project are documented here. The format follows
 - `split_body` (by planes, faces, sketches or surface bodies; refuses tools that do not cut), `delete_body`
   (delete or keep bodies) and `surface` (extruded, revolved, lofted, planar and offset surface bodies, listed
   by `list_bodies` and usable as `body:Name` split tools).
+- `hole` takes positions on several faces in one call and makes one Hole Wizard feature per face.
 - `design_guide('sheet_metal')`: bend radii for 5052, 6061, 2024 and 7075 aluminium, stainless and
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
