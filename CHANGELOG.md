@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `trim_members(corner='end')` trims or extends members to a boundary member at T-joints, moving each member's end
+  face onto the boundary's facing face; the cut list follows.
 - `fill_surface` patches a closed loop of edges (optionally knitting into a solid) and `trim_surface` trims a surface
   with another and keeps the piece holding a given point; surface edges are now addressable as `edge@x,y,z`.
 - Direct editing: `delete_faces` removes and heals faces (holes, pockets, fillets; the halves of split cylinders

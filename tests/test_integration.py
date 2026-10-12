@@ -1032,6 +1032,24 @@ def test_weldment_trim_extend(tmp_path: Path):
             assert sorted(i["length_mm"] for i in r["cut_list"]) == [180.0, 320.0]
         finally:
             await c.call("close_document")
+        # T-joints: a post stopping short of a beam, and one running through it, both ended on the beam's top face
+        for end_y in (40, -60):
+            await c.call("new_document", kind="part")
+            try:
+                await c.call("start_sketch", on="plane:Front")
+                await c.call("sketch", entities=[{"type": "line", "from": [0, 0], "to": [300, 0]}])
+                await c.call("finish_sketch")
+                await c.call("structural_member", shape="square_tube", size=[40, 3])
+                await c.call("start_sketch", on="plane:Front")
+                await c.call("sketch", entities=[{"type": "line", "from": [150, 200], "to": [150, end_y]}])
+                await c.call("finish_sketch")
+                await c.call("structural_member", shape="square_tube", size=[40, 3])
+                t = await c.call("trim_members", members=["body:square_tube_40x3 (2)"], to=["body:square_tube_40x3 (1)"], corner="end")
+                assert t["members"][0]["moved_mm"] == pytest.approx(end_y - 20)  # +20 extends the short post, -80 trims the long one
+                assert sorted(i["length_mm"] for i in t["cut_list"]) == [180.0, 300.0]  # the beam is left as it is
+                assert (await c.call("mass_properties"))["volume_mm3"] == pytest.approx(444 * (300 + 180))
+            finally:
+                await c.call("close_document")
 
     run(tmp_path, body)
 

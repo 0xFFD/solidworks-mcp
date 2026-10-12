@@ -335,17 +335,76 @@ def gusset(
 _TRIM_CORNER = {"miter": 1, "butt": 2, "butt_other": 3}  # weldment trim/extend corner types (measured)
 
 
+def _end_trim(doc: Any, members: list[str], to: list[str]) -> dict:
+    """T-joint end trim. SolidWorks' end trim does nothing through the API, so each member's end face nearest the
+    boundary is moved (direct editing) onto the boundary face that faces it; the cut list follows the body."""
+    if len(to) != 1:
+        raise SwError("An end trim needs one boundary member in to=[...].")
+    boundary = g.resolve(doc, to[0] if to[0].startswith("body:") else f"body:{to[0]}").obj
+    bbox = list(boundary.GetBodyBox())
+    centre = [(bbox[i] + bbox[i + 3]) / 2 for i in range(3)]
+
+    def planar(body: Any) -> list[tuple[Any, list[float], list[float], list[float]]]:
+        out = []
+        for f in SW.cast_all(body.GetFaces(), "IFace2"):
+            if SW.cast(f.GetSurface(), "ISurface").IsPlane():
+                box = f.GetBox
+                box = list(box() if callable(box) else box)
+                out.append((f, list(f.Normal), list(f.GetClosestPointOn(*[(box[i] + box[i + 3]) / 2 for i in range(3)]))[:3], box))
+        return out
+
+    walls = planar(boundary)
+    moved = []
+    for ref in members:
+        name = ref.removeprefix("body:")
+        body = g.resolve(doc, f"body:{name}").obj
+        best = None
+        for f, n, c, _ in sorted(planar(body), key=lambda e: math.dist(e[2], centre)):
+            for _, bn, bp, bb in walls:  # the boundary face facing this end, across the member's footprint
+                if sum(x * y for x, y in zip(n, bn)) > -0.9999:
+                    continue
+                if not all(bb[i] - 1e-6 <= c[i] <= bb[i + 3] + 1e-6 for i in range(3) if abs(n[i]) < 0.5):
+                    continue
+                d = sum((bp[i] - c[i]) * n[i] for i in range(3))
+                # the boundary's outer face is the first one met coming from the member's far end (smallest d),
+                # not the inner wall of a tube behind it
+                if best is None or d < best[1]:
+                    best = (f, d)
+            if best is not None:
+                break
+        if best is None:
+            raise SwError(f"No face of {to[0]} lies square across the end of {name}; end trims need the member to meet a flat face.")
+        f, d = best
+        if abs(d) > 1e-7:
+            # move this face object itself: a point on a tube end resolves to a neighbouring wall too easily
+            C = SW.C
+            doc.ClearSelection2(True)
+            g.Ref(f, "face", f"end of {name}").select(doc, mark=1)
+            feat = doc.FeatureManager.InsertMoveFace3(C.swMoveFaceTypeOffset, d < 0, 0.0, abs(d), None, None, C.swEndCondBlind, 0.0)
+            doc.ClearSelection2(True)
+            if feat is None:
+                raise SwError(f"SolidWorks could not move the end of {name}.")
+            doc.EditRebuild3()
+            moved.append({"member": name, "moved_mm": round(d * 1000, 4)})
+    out: dict[str, Any] = {"members": moved, "cut_list": _cut_list(doc)}
+    if not moved:
+        out["note"] = "The members already end on the boundary."
+    return out
+
+
 @tool(WRITES)
 def trim_members(
     members: Annotated[list[str], Field(min_length=1, description="Members to trim or extend ('body:Name' from list_bodies).")],
     to: Annotated[list[str], Field(min_length=1, description="Members they meet at the corner ('body:Name').")],
-    corner: Annotated[Literal["miter", "butt", "butt_other"], Field(description=(
+    corner: Annotated[Literal["miter", "butt", "butt_other", "end"], Field(description=(
         "miter: both cut at the bisecting angle; butt: `members` end on the face of `to`, which runs to their far side; "
-        "butt_other: the reverse."))] = "butt",
+        "butt_other: the reverse; end: a T-joint, `members` are trimmed or extended to the face of `to`, which is left as it is."))] = "butt",
 ) -> dict:
-    """Trim or extend weldment members to meet at a corner (members drawn short or overshooting, or from
-    separate sketches). Reports the cut list afterwards."""
+    """Trim or extend weldment members to meet at a corner or a T-joint (members drawn short or overshooting, or
+    from separate sketches). Reports the cut list afterwards."""
     doc = SW.active("part")
+    if corner == "end":
+        return _end_trim(doc, members, to)
     picked = []
     for r in members + to:
         ref = g.resolve(doc, r if r.startswith("body:") else f"body:{r}")
