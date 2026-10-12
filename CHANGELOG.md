@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `trim_members` trims or extends weldment members from separate sketches to meet at mitred or butted corners.
 - `view_dimensions(arrange=true)` packs a view's linear dimensions in rows by size (chained dimensions share a
   row), spaced for their text and kept clear of neighbouring views and the sheet edge.
 - Radial explode steps: `exploded_view(steps=[{components, radial: true, distance}])` moves a ring of parts

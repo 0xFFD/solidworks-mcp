@@ -970,6 +970,29 @@ def test_radial_explode(tmp_path: Path):
     run(tmp_path, body)
 
 
+def test_weldment_trim_extend(tmp_path: Path):
+    """A post drawn 10 mm short of a beam, from a separate sketch, extended to meet it at a butted corner."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "line", "from": [0, 0], "to": [300, 0]}])
+            await c.call("finish_sketch")
+            await c.call("structural_member", shape="square_tube", size=[40, 3])
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "line", "from": [300, 200], "to": [300, 30]}])
+            await c.call("finish_sketch")
+            await c.call("structural_member", shape="square_tube", size=[40, 3])
+            r = await c.call("trim_members", members=["body:square_tube_40x3 (2)"], to=["body:square_tube_40x3 (1)"], corner="butt")
+            # the post comes down onto the beam's top face (y = 20); the beam runs out to the post's far side (x = 320)
+            assert sorted(i["length_mm"] for i in r["cut_list"]) == [180.0, 320.0]
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
 def test_read_only_mode(tmp_path: Path):
     async def body(c: Session):
         info = await c.call("sw_info")

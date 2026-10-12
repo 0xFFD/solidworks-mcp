@@ -330,3 +330,39 @@ def gusset(
     out = result(doc, feat, "gusset", "The two faces must be planar faces of different members that meet at a corner, and the legs must fit on them.")
     out["plates"] = _new_bodies(doc, before)
     return out
+
+
+_TRIM_CORNER = {"miter": 1, "butt": 2, "butt_other": 3}  # weldment trim/extend corner types (measured)
+
+
+@tool(WRITES)
+def trim_members(
+    members: Annotated[list[str], Field(min_length=1, description="Members to trim or extend ('body:Name' from list_bodies).")],
+    to: Annotated[list[str], Field(min_length=1, description="Members they meet at the corner ('body:Name').")],
+    corner: Annotated[Literal["miter", "butt", "butt_other"], Field(description=(
+        "miter: both cut at the bisecting angle; butt: `members` end on the face of `to`, which runs to their far side; "
+        "butt_other: the reverse."))] = "butt",
+) -> dict:
+    """Trim or extend weldment members to meet at a corner (members drawn short or overshooting, or from
+    separate sketches). Reports the cut list afterwards."""
+    doc = SW.active("part")
+    picked = []
+    for r in members + to:
+        ref = g.resolve(doc, r if r.startswith("body:") else f"body:{r}")
+        if ref.kind != "body":
+            raise SwError(f"{r} is not a body.")
+        picked.append(ref.obj)
+    before = {b.Name: round(b.GetMassProperties(1.0)[3] * 1e9, 3) for b in g.bodies(doc)}
+    doc.ClearSelection2(True)
+    f = doc.FeatureManager.InsertWeldmentTrimFeature2(_TRIM_CORNER[corner], 0, 0.0, _dispatch_array(picked[:len(members)]),
+                                                     _dispatch_array(picked[len(members):]))
+    out = result(doc, f, "trim/extend", "The members must meet at a corner, as two ends that touch or would touch if extended.")
+    after = {b.Name: round(b.GetMassProperties(1.0)[3] * 1e9, 3) for b in g.bodies(doc)}
+    if sorted(after.values()) == sorted(before.values()):
+        doc.ClearSelection2(True)
+        SW.cast(f, "IFeature").Select2(False, 0)
+        doc.Extension.DeleteSelection2(SW.C.swDelete_Absorbed)
+        raise SwError("The trim/extend changed nothing; the members must meet at a corner (end to end, not a T-joint).")
+    out["bodies"] = [{"name": n, "volume_mm3": v} for n, v in after.items()]
+    out["cut_list"] = _cut_list(doc)
+    return out
