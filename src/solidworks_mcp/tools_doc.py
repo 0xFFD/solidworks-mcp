@@ -86,6 +86,16 @@ def marking(doc) -> str:
         return ""
 
 
+def load_failure(path: Path) -> str:
+    """Why SolidWorks would not load a file: most often another open document has the same file name."""
+    for d in SW.app.GetDocuments() or []:
+        other = SW.cast(d, "IModelDoc2").GetPathName()
+        if other and Path(other).name.lower() == path.name.lower() and Path(other).resolve() != path.resolve():
+            return (f"Could not load {path}: a different file with the same name is already open ({other}). SolidWorks "
+                    "keeps one document per file name; close it with close_document or rename one of the files.")
+    return f"Could not load {path}."
+
+
 def checked_marking(doc) -> str:
     """The document's export-control marking; raises when the server requires one and it is missing."""
     mark = marking(doc)

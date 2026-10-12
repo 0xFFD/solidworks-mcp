@@ -429,6 +429,11 @@ def test_drawing_details(tmp_path: Path):
             assert dim["value"] == pytest.approx(80)
             moved = await c.call("view_dimensions", view=front, move={dim["dimension"]: [95, 140]})
             assert next(d for d in moved["dimensions"] if d["name"] == dim["dimension"])["position_mm"] == [95.0, 140.0]
+            height = await c.call("drawing_dimension", view=front, refs=["edge@-40,10,20", "edge@-40,0,20"], orientation="vertical", position=[30, 110])
+            tol = await c.call("view_dimensions", view=front, tolerance={dim["dimension"]: {"type": "bilateral", "plus": 0.1, "minus": 0.02},
+                                                                       height["dimension"]: {"type": "basic"}}, decimals={dim["dimension"]: 3})
+            got = {d["name"]: d.get("tolerance") for d in tol["dimensions"]}
+            assert got[dim["dimension"]] == {"type": "bilateral", "plus": 0.1, "minus": 0.02} and got[height["dimension"]] == {"type": "basic"}
             holes = await c.call("drawing_table", kind="hole", view=top, face="face@10,10,0", position=[300, 285], anchor="top_left")
             assert len(holes["rows"]) == 6 and holes["rows"][-1][-1].startswith("<MOD-DIAM> 3.30")
             rev = await c.call("drawing_table", kind="revision", revisions=[{"rev": "A", "description": "INITIAL RELEASE", "approved": "QA"}])

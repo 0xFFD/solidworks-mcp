@@ -32,7 +32,8 @@ All notable changes to this project are documented here. The format follows
   `drawing_dimension` (reference dimensions between model edges in a view) and `drawing_table` (bill of
   materials with balloons, revision block with revision rows, hole table with tags and callouts).
   `section_view` takes `points` for half, offset and aligned sections along a cutting path with corners.
-  `view_dimensions` lists the dimensions of a view with values and positions and moves them.
+  `view_dimensions` lists the dimensions of a view with values, tolerances and positions, moves them, and
+  sets tolerances (symmetric, bilateral, limit, min, max, basic) and decimal places.
   `broken_view` shortens long parts between two model points, and `breakout_section` cuts away a circular
   region of a view to a depth to show bores and pockets.
   `drawing_views` lists the sheets, and `section_view` reports the number of cut faces and warns when the
@@ -75,6 +76,8 @@ All notable changes to this project are documented here. The format follows
 - `section_view` drew its cutting line in sheet coordinates inside the view's own sketch, so the line
   landed beside the part and the section showed no cut. It now cuts where asked.
 - `create_drawing(model=...)` failed when the model was not open; it is now loaded first.
+- `insert_component` and drawings reported only "Could not load" when another open document had the same file
+  name; they now name that document and say how to resolve it.
 - `create_drawing(scale=...)` was overridden by SolidWorks' automatic view scale; the requested scale is now
   applied after the views are made and the views are moved back onto the sheet (with a warning when they
   cannot fit).

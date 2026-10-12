@@ -11,7 +11,7 @@ from . import geometry as g
 from .com import SW, const_name, mm, rad, to_mm
 from .errors import SwError
 from .registry import READ_ONLY, WRITES, app, tool
-from .tools_doc import NATIVE
+from .tools_doc import NATIVE, load_failure
 
 MATES = {"coincident": "swMateCOINCIDENT", "concentric": "swMateCONCENTRIC", "perpendicular": "swMatePERPENDICULAR",
          "parallel": "swMatePARALLEL", "tangent": "swMateTANGENT", "distance": "swMateDISTANCE", "angle": "swMateANGLE", "lock": "swMateLOCK"}
@@ -55,7 +55,7 @@ def insert_component(
     res = SW.app.OpenDoc6(str(p), NATIVE[p.suffix.lower()], C.swOpenDocOptions_Silent, "", 0, 0)
     loaded = res[0] if isinstance(res, tuple) else res
     if loaded is None:
-        raise SwError(f"Could not load {p}.")
+        raise SwError(load_failure(p))
     SW.app.ActivateDoc3(title, False, 0, 0)
     x, y, z = (mm(v) for v in (list(position) + [0, 0, 0])[:3])
     comp = asm.AddComponent5(str(p), C.swAddComponentConfigOptions_CurrentSelectedConfig, "", False, "", x, y, z)

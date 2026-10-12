@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -12,7 +13,7 @@ from . import geometry as g
 from .com import SW, const_name, doc_kind, mm, to_deg, to_mm
 from .errors import SwError
 from .registry import READ_ONLY, WRITES, app, tool
-from .tools_doc import TEMPLATE_PREFS, paper_size
+from .tools_doc import TEMPLATE_PREFS, load_failure, paper_size
 
 # Symbol codes from the SolidWorks symbol library (gtol.sym); IGtol takes them as text.
 GCS = {
@@ -285,7 +286,7 @@ def _load_model(path: Path) -> None:
     active = SW.app.ActiveDoc
     res = SW.app.OpenDoc6(str(path), kind, C.swOpenDocOptions_Silent, "", 0, 0)
     if (res[0] if isinstance(res, tuple) else res) is None:
-        raise SwError(f"Could not open {path.name}.")
+        raise SwError(load_failure(path))
     if active is not None:
         SW.app.ActivateDoc3(SW.cast(active, "IModelDoc2").GetTitle(), False, 0, 0)
 
@@ -1055,9 +1056,13 @@ def _view_dims(v: Any) -> list[tuple[str, Any, Any]]:
 def view_dimensions(
     view: Annotated[str, Field(description="View name.")],
     move: Annotated[dict[str, list[float]] | None, Field(description="Dimensions to move: {name: [x, y]} with the new text position in sheet mm (names as listed, e.g. 'D1@Sketch1').")] = None,
+    tolerance: Annotated[dict[str, dict[str, Any]] | None, Field(description=(
+        "Tolerances: {name: {type, plus, minus}} in mm (degrees for angles). Types: none, basic (boxed theoretically exact), "
+        "symmetric (± plus), bilateral (+plus / -minus), limit (shown as upper and lower size), min, max."))] = None,
+    decimals: Annotated[dict[str, int] | None, Field(description="Decimal places per dimension, {name: places}; the tolerance uses the same.")] = None,
 ) -> dict:
-    """List the dimensions shown in a drawing view with their values and text positions (sheet mm), and
-    move any of them to tidy overlapping or crowded annotations."""
+    """List the dimensions shown in a drawing view with their values, tolerances and text positions (sheet
+    mm); move them to tidy crowded annotations, and set tolerances (±, bilateral, limits, basic) and precision."""
     doc = SW.active("drawing")
     drw = SW.drawing(doc)
     v = _view(drw, view)
@@ -1071,14 +1076,48 @@ def view_dimensions(
         ann = SW.cast(by_name[name][0].GetAnnotation(), "IAnnotation")
         if not ann.SetPosition2(mm(pos[0]), mm(pos[1]), 0.0):
             raise SwError(f"SolidWorks could not move {name}.")
-    if move:
+    C = SW.C
+    tol_types = {"none": C.swTolNONE, "basic": C.swTolBASIC, "symmetric": C.swTolSYMMETRIC, "bilateral": C.swTolBILAT,
+                 "limit": C.swTolLIMIT, "min": C.swTolMIN, "max": C.swTolMAX}
+    for name, spec in (tolerance or {}).items():
+        if name not in by_name:
+            raise SwError(f"No dimension '{name}' in {view}. Dimensions: {sorted(by_name)}")
+        kind = str(spec.get("type", "symmetric")).lower()
+        if kind not in tol_types:
+            raise SwError(f"{name}: tolerance type must be one of {', '.join(tol_types)}.")
+        dim = by_name[name][1]
+        angular = dim.GetType() == C.swDimensionParamTypeDoubleAngular
+        conv = (lambda v: math.radians(float(v))) if angular else (lambda v: mm(float(v)))
+        tol = SW.cast(dim.Tolerance, "IDimensionTolerance")
+        tol.Type = tol_types[kind]
+        if kind in ("symmetric", "bilateral", "limit", "min", "max"):
+            plus = float(spec.get("plus", 0))
+            minus = float(spec.get("minus", plus if kind == "symmetric" else 0))
+            if plus <= 0 and minus <= 0:
+                raise SwError(f"{name}: give plus (and minus) tolerance values above 0.")
+            if not tol.SetValues(-conv(abs(minus)), conv(plus)):
+                raise SwError(f"SolidWorks rejected the tolerance on {name}.")
+    for name, places in (decimals or {}).items():
+        if name not in by_name:
+            raise SwError(f"No dimension '{name}' in {view}. Dimensions: {sorted(by_name)}")
+        by_name[name][0].SetPrecision3(int(places), -1, int(places), -1)
+    if move or tolerance or decimals:
+        doc.EditRebuild3()
         doc.GraphicsRedraw2()
+    names_tol = {v: k for k, v in tol_types.items()}
     rows = []
     for name, dd, dim in _view_dims(v):
         angular = dim.GetType() == SW.C.swDimensionParamTypeDoubleAngular
         val = dim.SystemValue
-        rows.append({"name": name, "value": round(to_deg(val), 4) if angular else round(to_mm(val), 4), "unit": "deg" if angular else "mm",
-                     "position_mm": [round(to_mm(c), 2) for c in list(SW.cast(dd.GetAnnotation(), "IAnnotation").GetPosition())[:2]]})
+        row = {"name": name, "value": round(to_deg(val), 4) if angular else round(to_mm(val), 4), "unit": "deg" if angular else "mm",
+               "position_mm": [round(to_mm(c), 2) for c in list(SW.cast(dd.GetAnnotation(), "IAnnotation").GetPosition())[:2]]}
+        tol = SW.cast(dim.Tolerance, "IDimensionTolerance")
+        if tol is not None and tol.Type in names_tol and tol.Type != C.swTolNONE:
+            back = to_deg if angular else to_mm
+            row["tolerance"] = {"type": names_tol[tol.Type]}
+            if tol.Type != C.swTolBASIC:
+                row["tolerance"].update(plus=round(back(tol.GetMaxValue()), 4) + 0.0, minus=round(-back(tol.GetMinValue()), 4) + 0.0)
+        rows.append(row)
     out: dict[str, Any] = {"view": view, "outline_mm": [round(to_mm(c), 2) for c in _outline(v)], "dimensions": rows}
     if move:
         out["moved"] = sorted(move)
