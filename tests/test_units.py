@@ -195,9 +195,27 @@ def test_tools_registered_with_annotations():
                  "configurations", "combine", "move_body", "sheet_metal_base", "edge_flange", "flat_pattern",
                  "detail_view", "projected_view", "auxiliary_view", "add_view", "sheets", "drawing_dimension", "drawing_table", "exploded_view", "add_datum_target", "hem", "sketched_bend", "split_body", "surface", "broken_view", "breakout_section", "driven_pattern", "convert_to_sheet_metal", "view_dimensions", "structural_member", "closed_corner"):
         assert tools[name].annotations.read_only_hint is False, name
-    for name in ("cut_list",):
+    for name in ("cut_list", "member_check"):
         assert tools[name].annotations.read_only_hint is True, name
     assert "millimetres" in server.INSTRUCTIONS
+    readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+    assert f"{len(tools)} tools and one prompt" in readme
+
+
+def test_member_check_tool_needs_no_solidworks():
+    from solidworks_mcp.tools_weldment import member_check
+
+    # 25 x 2 square tube, 600 mm cantilever, 150 N at the tip: hand calc I = (25^4 - 21^4) / 12
+    i = (25**4 - 21**4) / 12
+    r = member_check(shape="square_tube", size=[25, 2], length=600, e_modulus=70000, yield_strength=240,
+                     ultimate_strength=290, support="cantilever", load=150, max_deflection=5)
+    assert r["bending_stress_MPa"] == pytest.approx(150 * 600 * 12.5 / i, rel=1e-3)
+    assert r["deflection_mm"] == pytest.approx(150 * 600**3 / (3 * 70000 * i), rel=1e-3)
+    assert r["ms_ultimate"] == pytest.approx(290 / (1.5 * r["max_stress_MPa"]) - 1, abs=2e-3)
+    assert r["ok"] is (r["deflection_mm"] <= 5 and r["ms_yield"] >= 0 and r["ms_ultimate"] >= 0)
+    assert "buckling" not in r
+    with pytest.raises(SwError):
+        member_check(shape="angle", size=[50, 5], length=100, e_modulus=70000, yield_strength=240)
 
 
 def test_install_snippets():

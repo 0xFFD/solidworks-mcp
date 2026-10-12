@@ -199,3 +199,65 @@ def test_order_chain():
         shapes.order_chain([((0, 0), (1, 0)), ((5, 5), (6, 6))])  # two separate pieces
     with pytest.raises(SwError):
         shapes.order_chain([((0, 0), (1, 0)), ((1, 0), (2, 0)), ((1, 0), (1, 1))])  # a branch
+
+
+def test_section_properties_match_hand_calculations():
+    # rectangular tube 50 x 30 x 3: (50*30^3 - 44*24^3) / 12
+    s = shapes.section_properties("rect_tube", [50, 30, 3])
+    assert s["area"] == pytest.approx(50 * 30 - 44 * 24)
+    assert s["ixx"] == pytest.approx((50 * 30**3 - 44 * 24**3) / 12)
+    assert s["iyy"] == pytest.approx((30 * 50**3 - 24 * 44**3) / 12)
+    assert s["ixy"] == pytest.approx(0, abs=1e-6) and s["centroid"] == pytest.approx((0, 0), abs=1e-9)
+    t = shapes.section_properties("round_tube", [40, 2])
+    assert t["ixx"] == pytest.approx(math.pi * (40**4 - 36**4) / 64) and t["imin"] == pytest.approx(t["ixx"])
+    # equal angle 50 x 50 x 5: centroid 14.34 from the heel, Ix 112,503 mm^4 (tables with root radius: 11.0 cm^4), principal axes at 45 deg
+    a = shapes.section_properties("angle", [50, 50, 5])
+    assert a["area"] == pytest.approx(475)
+    cx = (50 * 5 * 25 + 45 * 5 * 2.5) / 475
+    assert a["centroid"] == pytest.approx((cx, cx))
+    ix = 50 * 5**3 / 12 + 250 * (2.5 - cx) ** 2 + 5 * 45**3 / 12 + 225 * (27.5 - cx) ** 2
+    assert a["ixx"] == pytest.approx(ix) and a["iyy"] == pytest.approx(ix)
+    assert abs(a["principal_angle"]) == pytest.approx(45)
+    assert a["imax"] + a["imin"] == pytest.approx(2 * ix) and a["imin"] < ix
+    # channel 100 x 50 x 5 is symmetric about x
+    c = shapes.section_properties("channel", [100, 50, 5])
+    assert c["centroid"][1] == pytest.approx(0, abs=1e-9) and c["ixy"] == pytest.approx(0, abs=1e-6)
+    assert c["ixx"] == pytest.approx((50 * 100**3 - 45 * 90**3) / 12)
+    with pytest.raises(SwError):
+        shapes.section_properties("round_tube", [10, 5])
+
+
+def test_member_check_cantilever_and_buckling():
+    s = shapes.section_properties("flat_bar", [20, 10])  # bending about x: I = 20*10^3/12, c = 5
+    i = 20 * 10**3 / 12
+    r = shapes.member_check(s, 500, "cantilever", "point", 100, "y", 0, 70000, 270, 310, 1.0, 1.5)
+    assert r["bending_moment"] == pytest.approx(50000)
+    assert r["bending_stress"] == pytest.approx(50000 * 5 / i)
+    assert r["deflection"] == pytest.approx(100 * 500**3 / (3 * 70000 * i))
+    assert r["ms_yield"] == pytest.approx(270 / r["max_stress"] - 1)
+    assert r["ms_ultimate"] == pytest.approx(310 / (1.5 * r["max_stress"]) - 1)
+    # simply supported uniform load in x uses Iyy
+    u = shapes.member_check(s, 1000, "simply_supported", "distributed", 1000, "x", 0, 70000, 270, None, 1.0, 1.5)
+    iy = 10 * 20**3 / 12
+    assert u["bending_stress"] == pytest.approx(1000 * 1000 / 8 * 10 / iy)
+    assert u["deflection"] == pytest.approx(5 * 1000 * 1000**3 / (384 * 70000 * iy))
+    # pinned slender column buckles elastically (Euler); a short one by Johnson below the yield stress
+    t = shapes.section_properties("round_tube", [25, 1.5])
+    long = shapes.member_check(t, 2000, "simply_supported", "point", 0, "y", -2000, 70000, 270, None, 1.0, 1.5)
+    assert long["buckling_mode"] == "euler"
+    assert long["critical_load"] == pytest.approx(math.pi**2 * 70000 * t["imin"] / 2000**2)
+    assert long["ms_buckling"] == pytest.approx(long["critical_load"] / 3000 - 1)
+    short = shapes.member_check(t, 200, "fixed_fixed", "point", 0, "y", -2000, 70000, 270, None, 1.0, 1.5)
+    assert short["buckling_mode"] == "johnson" and short["critical_load"] < 270 * t["area"]
+    # combined: axial tension adds to the bending stress on the tension side
+    c = shapes.member_check(s, 500, "cantilever", "point", 100, "y", 2000, 70000, 270, None, 1.0, 1.5)
+    assert c["max_stress"] == pytest.approx(r["bending_stress"] + 2000 / 200)
+    assert "ms_buckling" not in c
+
+
+def test_member_check_unsymmetric_angle_deflects_more():
+    a = shapes.section_properties("angle", [50, 50, 5])
+    r = shapes.member_check(a, 1000, "cantilever", "point", 100, "y", 0, 70000, 270, None, 1.0, 1.5)
+    # an angle loaded along a leg bends about both principal axes: stiffer than Imin, softer than Ixx alone
+    naive = 100 * 1000**3 / (3 * 70000 * a["ixx"])
+    assert naive < r["deflection"] < 100 * 1000**3 / (3 * 70000 * a["imin"])

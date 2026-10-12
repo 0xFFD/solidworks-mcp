@@ -425,3 +425,60 @@ def trim_members(
     out["bodies"] = [{"name": n, "volume_mm3": v} for n, v in after.items()]
     out["cut_list"] = _cut_list(doc)
     return out
+
+
+@tool(READ_ONLY)
+def member_check(
+    shape: Annotated[Literal["rect_tube", "square_tube", "round_tube", "round_bar", "flat_bar", "angle", "channel"], Field(description="Profile shape, as in structural_member.")],
+    size: Annotated[list[float], Field(description="Profile dimensions in mm, as in structural_member.")],
+    length: Annotated[float, Field(gt=0, description="Span or cantilever length in mm (cut_list gives member lengths).")],
+    e_modulus: Annotated[float, Field(gt=0, description="Young's modulus in MPa (e.g. 71000 for 7075-T6).")],
+    yield_strength: Annotated[float, Field(gt=0, description="Tensile yield allowable Fty in MPa, from your design allowables.")],
+    ultimate_strength: Annotated[float | None, Field(gt=0, description="Tensile ultimate allowable Ftu in MPa, for the ultimate margin.")] = None,
+    support: Annotated[Literal["cantilever", "simply_supported", "fixed_fixed"], Field(description="End conditions; also set the buckling length (K = 2, 1, 0.5).")] = "simply_supported",
+    load_type: Annotated[Literal["point", "distributed"], Field(description="Point load at the tip (cantilever) or mid-span, or a uniform load.")] = "point",
+    load: Annotated[float, Field(description="Transverse limit load in N (total for a distributed load).")] = 0.0,
+    direction: Annotated[Literal["x", "y"], Field(description=(
+        "Load direction in the profile's sketch axes: rect tube width and channel flanges along x; angle legs along +x and +y."))] = "y",
+    axial: Annotated[float, Field(description="Axial limit load in N, positive in tension, negative in compression.")] = 0.0,
+    yield_factor: Annotated[float, Field(gt=0, description="Factor on limit load for the yield margin.")] = 1.0,
+    ultimate_factor: Annotated[float, Field(gt=0, description="Factor of safety on limit load for the ultimate and buckling margins.")] = 1.5,
+    max_deflection: Annotated[float | None, Field(gt=0, description="Allowed deflection in mm, to check against.")] = None,
+) -> dict:
+    """Hand-calculation strength check of a structural member (no Simulation licence needed): section
+    properties of the profile, bending, axial and average shear stresses, deflection, column buckling (Euler,
+    or Johnson for short columns) and margins of safety MS = allowable / (factor x stress) - 1. Bending of
+    angles is unsymmetric (about both principal axes). Stresses are elastic and sharp-cornered; axial and
+    bending are superposed without beam-column amplification, so keep compression well below the buckling load."""
+    names = SHAPES[shape]
+    if len(size) != len(names) or min(size) <= 0:
+        raise SwError(f"A {shape} profile needs size = [{', '.join(names)}] in mm, all above 0.")
+    sec = shapes.section_properties(shape, [float(v) for v in size])
+    r = shapes.member_check(sec, length, support, load_type, load, direction, axial, e_modulus, yield_strength,
+                            ultimate_strength, yield_factor, ultimate_factor)
+
+    def rnd(v: float, n: int = 4) -> float:
+        return float(f"{v:.{n}g}") if math.isfinite(v) else v
+
+    out: dict[str, Any] = {
+        "section": {"area_mm2": rnd(sec["area"]), "centroid_mm": [round(c, 3) for c in sec["centroid"]],
+                    "ixx_mm4": rnd(sec["ixx"]), "iyy_mm4": rnd(sec["iyy"]), "ixy_mm4": rnd(sec["ixy"]) if abs(sec["ixy"]) > 1e-6 * sec["imax"] else 0.0,
+                    "imax_mm4": rnd(sec["imax"]), "imin_mm4": rnd(sec["imin"]),
+                    "principal_angle_deg": round(sec["principal_angle"], 2), "r_min_mm": rnd(sec["r_min"])},
+        "bending_moment_Nmm": rnd(r["bending_moment"]), "bending_stress_MPa": rnd(r["bending_stress"]),
+        "axial_stress_MPa": rnd(r["axial_stress"]), "max_stress_MPa": rnd(r["max_stress"]),
+        "average_shear_stress_MPa": rnd(r["average_shear_stress"]), "deflection_mm": rnd(r["deflection"]),
+        "ms_yield": round(r["ms_yield"], 3) if math.isfinite(r["ms_yield"]) else None,
+    }
+    if "ms_ultimate" in r:
+        out["ms_ultimate"] = round(r["ms_ultimate"], 3) if math.isfinite(r["ms_ultimate"]) else None
+    if "ms_buckling" in r:
+        out["buckling"] = {"mode": r["buckling_mode"], "slenderness": rnd(r["slenderness"]),
+                           "critical_load_N": rnd(r["critical_load"]), "ms": round(r["ms_buckling"], 3)}
+    if max_deflection is not None:
+        out["deflection_ok"] = r["deflection"] <= max_deflection
+    margins = [m for m in (out["ms_yield"], out.get("ms_ultimate"), out.get("buckling", {}).get("ms")) if m is not None]
+    out["ok"] = all(m >= 0 for m in margins) and out.get("deflection_ok", True)
+    if load == 0 and axial == 0:
+        out["warning"] = "No load given; only the section properties are meaningful."
+    return out

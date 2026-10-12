@@ -371,3 +371,120 @@ def order_chain(ends: list[tuple[tuple[float, ...], tuple[float, ...]]], tol: fl
     if len(out) != n:
         raise SwError("The path's curves are not connected end to end.")
     return out
+
+
+def _polygon_moments(pts: list[tuple[float, float]]) -> tuple[float, float, float, float, float, float]:
+    """Signed area, first moments (Qx about x, Qy about y) and second moments (Ixx, Iyy, Ixy) of a polygon about
+    the origin; positive for a counter-clockwise outline."""
+    a = qx = qy = ixx = iyy = ixy = 0.0
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
+        c = x0 * y1 - x1 * y0
+        a += c / 2
+        qy += (x0 + x1) * c / 6
+        qx += (y0 + y1) * c / 6
+        ixx += (y0 * y0 + y0 * y1 + y1 * y1) * c / 12
+        iyy += (x0 * x0 + x0 * x1 + x1 * x1) * c / 12
+        ixy += (x0 * y1 + 2 * x0 * y0 + 2 * x1 * y1 + x1 * y0) * c / 24
+    return a, qx, qy, ixx, iyy, ixy
+
+
+def _rect(w: float, h: float) -> list[tuple[float, float]]:
+    return [(-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)]
+
+
+def section_properties(shape: str, d: list[float]) -> dict:
+    """Section properties (mm) of the generated weldment profiles, sharp-cornered and in the same sketch axes as
+    the profile: area, centroid, centroidal Ixx, Iyy, Ixy, principal Imax/Imin with the angle of the major axis
+    from x, radius of gyration about the minor axis, and the outer fibre points used for stresses."""
+    if shape in ("round_tube", "round_bar"):
+        r = d[0] / 2
+        ri = r - d[1] if shape == "round_tube" else 0.0
+        if shape == "round_tube" and ri <= 0:
+            raise SwError("The tube wall is too thick for its diameter.")
+        area = math.pi * (r * r - ri * ri)
+        i = math.pi * (r ** 4 - ri ** 4) / 4
+        cx = cy = ixx_o = iyy_o = ixy_o = 0.0
+        ixx, iyy, ixy = i, i, 0.0
+        fibres = [(r * math.cos(k * math.pi / 36), r * math.sin(k * math.pi / 36)) for k in range(72)]
+    else:
+        if shape in ("rect_tube", "square_tube"):
+            w, h, t = (d[0], d[1], d[2]) if shape == "rect_tube" else (d[0], d[0], d[1])
+            if 2 * t >= min(w, h):
+                raise SwError("The tube wall is too thick for its size.")
+            outlines = [(_rect(w, h), 1), (_rect(w - 2 * t, h - 2 * t), -1)]
+        elif shape == "flat_bar":
+            outlines = [(_rect(d[0], d[1]), 1)]
+        elif shape == "angle":
+            a, b, t = d
+            if t >= min(a, b):
+                raise SwError("The angle's thickness must be less than both legs.")
+            outlines = [([(0, 0), (a, 0), (a, t), (t, t), (t, b), (0, b)], 1)]
+        elif shape == "channel":
+            h, b, t = d
+            if 2 * t >= h or t >= b:
+                raise SwError("The channel's thickness must be less than its flange and half its height.")
+            pts = [(0, 0), (b, 0), (b, t), (t, t), (t, h - t), (b, h - t), (b, h), (0, h)]
+            outlines = [([(x, y - h / 2) for x, y in pts], 1)]
+        else:
+            raise SwError(f"Unknown profile shape '{shape}'.")
+        tot = [0.0] * 6
+        for pts, sign in outlines:
+            m = _polygon_moments(pts)
+            s = sign * (1 if m[0] > 0 else -1)  # orientation-independent
+            tot = [u + s * v for u, v in zip(tot, m)]
+        area, qx, qy, ixx_o, iyy_o, ixy_o = tot
+        cx, cy = qy / area, qx / area
+        ixx, iyy, ixy = ixx_o - area * cy * cy, iyy_o - area * cx * cx, ixy_o - area * cx * cy
+        fibres = [(x - cx, y - cy) for x, y in outlines[0][0]]
+    mean, half = (ixx + iyy) / 2, math.hypot((ixx - iyy) / 2, ixy)
+    imax, imin = mean + half, mean - half
+    angle = 0.5 * math.degrees(math.atan2(-2 * ixy, ixx - iyy)) if half > 1e-12 * mean else 0.0
+    return {"area": area, "centroid": (cx, cy), "ixx": ixx, "iyy": iyy, "ixy": ixy, "imax": imax, "imin": imin,
+            "principal_angle": angle, "r_min": math.sqrt(imin / area), "fibres": fibres}
+
+
+# (moment coefficient, deflection coefficient, end shear coefficient, effective length factor K) for
+# load P (point) or wL (distributed): M = cM * P * L, deflection = cD * P * L^3 / (E I), V = cV * P
+_BEAM_CASES = {
+    ("cantilever", "point"): (1.0, 1 / 3, 1.0, 2.0),
+    ("cantilever", "distributed"): (1 / 2, 1 / 8, 1.0, 2.0),
+    ("simply_supported", "point"): (1 / 4, 1 / 48, 1 / 2, 1.0),
+    ("simply_supported", "distributed"): (1 / 8, 5 / 384, 1 / 2, 1.0),
+    ("fixed_fixed", "point"): (1 / 8, 1 / 192, 1 / 2, 0.5),
+    ("fixed_fixed", "distributed"): (1 / 12, 1 / 384, 1 / 2, 0.5),
+}
+
+
+def member_check(sec: dict, length: float, support: str, load_type: str, load: float, direction: str,
+                 axial: float, e: float, fty: float, ftu: float | None, yield_factor: float, ultimate_factor: float) -> dict:
+    """Closed-form strength check of a straight prismatic member (mm, N, MPa). load is the transverse load in
+    the profile's x or y direction (point load at the tip or mid-span, or the total of a uniform load); axial is
+    positive in tension. Bending is unsymmetric (exact for angles), stresses are summed with the axial stress at
+    the outer fibres, and compression is checked for Euler or, for short columns, Johnson buckling. Margins of
+    safety are allowable / (factor x applied) - 1."""
+    cm, cd, cv, k = _BEAM_CASES[(support, load_type)]
+    ixx, iyy, ixy, area = sec["ixx"], sec["iyy"], sec["ixy"], sec["area"]
+    det = ixx * iyy - ixy * ixy
+    m = cm * load * length
+    if direction == "y":  # moment about x
+        stress = [m * (iyy * y - ixy * x) / det for x, y in sec["fibres"]]
+        flex = math.hypot(iyy, ixy) / det
+    else:  # moment about y
+        stress = [m * (ixx * x - ixy * y) / det for x, y in sec["fibres"]]
+        flex = math.hypot(ixx, ixy) / det
+    bending = max(abs(s) for s in stress)
+    combined = max(max(abs(axial / area + s), abs(axial / area - s)) for s in stress)
+    out = {"bending_moment": m, "bending_stress": bending, "axial_stress": axial / area, "max_stress": combined,
+           "shear_force": cv * abs(load), "average_shear_stress": cv * abs(load) / area,
+           "deflection": cd * abs(load) * length ** 3 * flex / e}
+    out["ms_yield"] = fty / (yield_factor * combined) - 1 if combined > 0 else math.inf
+    if ftu:
+        out["ms_ultimate"] = ftu / (ultimate_factor * combined) - 1 if combined > 0 else math.inf
+    if axial < 0:
+        slender = k * length / sec["r_min"]
+        euler = math.pi ** 2 * e / slender ** 2
+        transition = math.pi * math.sqrt(2 * e / fty)
+        crit = euler if slender >= transition else fty - (fty * slender / (2 * math.pi)) ** 2 / e
+        out.update({"slenderness": slender, "buckling_mode": "euler" if slender >= transition else "johnson",
+                    "critical_load": crit * area, "ms_buckling": crit * area / (ultimate_factor * -axial) - 1})
+    return out

@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `member_check` substantiates a straight member by hand calculation: section properties of the generated
+  profiles (principal axes for angles), unsymmetric bending stress, deflection, average shear, Euler or Johnson
+  buckling and margins of safety on yield, ultimate and buckling with chosen factors (no Simulation licence needed).
 - Path mates: `add_mate(type='path', path_orientation='free'|'fixed')` keeps a component vertex on a curve (an assembly sketch line, arc or spline,
   or an edge) as a point-on-curve coincidence, since SolidWorks' own path mate has no API; a chain of curves is
   fitted with one spline (deviation reported).
