@@ -82,7 +82,7 @@ def insert_component(
     return {"component": comp.Name2, "file": str(p), "fixed": bool(comp.IsFixed())}
 
 
-ADVANCED = ("limit_distance", "limit_angle", "width", "symmetric", "gear", "slot", "hinge")
+ADVANCED = ("limit_distance", "limit_angle", "width", "symmetric", "gear", "slot", "hinge", "rack_pinion", "screw", "universal_joint")
 
 
 def _entities(doc, refs: list[str]):
@@ -131,6 +131,26 @@ def _advanced_mate(doc, asm, type: str, refs: list[str], distance: float, angle:
             data.Distance = mm(distance)
         elif slot_position == "percent":
             data.Percent = float(percent if percent is not None else 50.0) / 100.0
+    elif type == "rack_pinion":
+        if not distance or distance <= 0:
+            raise SwError("A rack and pinion mate needs distance= (the pinion pitch diameter in mm).")
+        data = SW.cast(asm.CreateMateData(C.swMateRACKPINION), "IRackPinionMateFeatureData")
+        data.SetEntitiesToMate(C.swRackPinionMateEntityType_Rack, g.resolve(doc, refs[0]).obj)
+        data.SetEntitiesToMate(C.swRackPinionMateEntityType_Pinion, g.resolve(doc, refs[1]).obj)
+        data.DiameterType = C.swPinionPitchDiameter
+        data.DiameterVal = mm(distance)
+        data.Reverse = flip
+    elif type == "screw":
+        if not distance or distance <= 0:
+            raise SwError("A screw mate needs distance= (the lead: travel per revolution in mm).")
+        data = SW.cast(asm.CreateMateData(C.swMateSCREW), "IScrewMateFeatureData")
+        data.EntitiesToMate = _entities(doc, refs)
+        data.RevolutionType = C.swDistancePerRevolution
+        data.RevolutionVal = mm(distance)
+        data.Reverse = flip
+    elif type == "universal_joint":
+        data = SW.cast(asm.CreateMateData(C.swMateUNIVERSALJOINT), "IUniversalJointMateFeatureData")
+        data.EntitiesToMate = _entities(doc, refs)
     elif type == "hinge":
         if not faces or len(faces) != 2:
             raise SwError("A hinge mate needs refs = two cylindrical faces (the pivot) and faces = two planar faces that stay in contact.")
@@ -147,16 +167,25 @@ def _advanced_mate(doc, asm, type: str, refs: list[str], distance: float, angle:
     doc.ClearSelection2(True)
     if asm.CreateMate(data) is None:
         raise SwError(f"SolidWorks could not add the {type} mate. Check that the entities suit this mate type.")
+    if type in ("screw", "rack_pinion"):
+        # the lead / pitch diameter in the mate data is replaced by a default; it lives in the mate's dimension
+        doc.EditRebuild3()
+        dim = doc.Parameter(f"D1@{_last_mate(doc)}")
+        if dim is not None:
+            SW.cast(dim, "IDimension").SetSystemValue3(mm(distance), C.swSetValue_InAllConfigurations, None)
 
 
 @tool(WRITES)
 def add_mate(
     type: Annotated[Literal["coincident", "concentric", "perpendicular", "parallel", "tangent", "distance", "angle", "lock",
-                            "limit_distance", "limit_angle", "width", "symmetric", "gear", "slot", "hinge"], Field(description=(
+                            "limit_distance", "limit_angle", "width", "symmetric", "gear", "slot", "hinge", "rack_pinion", "screw",
+                            "universal_joint"], Field(description=(
         "Mate type. limit_distance / limit_angle allow travel between minimum and maximum (control surface stops, slides); "
         "width centres a tab between two faces; symmetric places two entities symmetric about plane; gear couples rotation "
         "of two cylindrical faces or circular edges by ratio; slot keeps a pin (cylinder or axis) in a slot face; hinge is a "
-        "concentric pivot (refs) plus coincident faces (faces) in one mate."))],
+        "concentric pivot (refs) plus coincident faces (faces) in one mate; rack_pinion couples a linear edge (refs[0]) "
+        "to a rotating cylinder (refs[1]) with distance = pitch diameter; screw couples rotation and travel of two "
+        "cylindrical faces with distance = lead per revolution (jackscrews, actuators); universal_joint couples two shafts."))],
     refs: Annotated[list[str], Field(description="Two references on different components: 'face:Comp-1/N', 'edge:Comp-1/N', 'face@Comp-1/x,y,z', plane names, or 'comp:Name' for lock. Width: the two width faces.")],
     distance: Annotated[float, Field(description="Distance in mm (distance mates; nominal position for limit_distance).")] = 0.0,
     angle: Annotated[float, Field(description="Angle in degrees (angle mates; nominal position for limit_angle).")] = 0.0,

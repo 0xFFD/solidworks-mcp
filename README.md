@@ -51,7 +51,7 @@ The existing servers cover a few sketch and extrude calls, are written against o
 | Checks | Mass, centre of mass and inertia tensor, bounding box, body fault check, rebuild errors, measurement, interference detection, and screenshots returned as images |
 | Picking geometry | `list_faces` and `list_edges` describe every face and edge (type, outward normal, radius, axis, hole or boss, a point on it), and any entity can be picked by index or by a point near it: `face@50,0,0` |
 | Exports | STEP AP242 (with the MBD licence), AP214 and AP203, IGES, Parasolid, STL, 3MF, PDF, DXF, DWG, eDrawings, PNG. Every STEP file is read back to confirm the protocol and that it holds solid geometry |
-| Assemblies | Insert components, mates (coincident, concentric, distance, angle, parallel, perpendicular, tangent, lock, and limit distance and angle for travel stops, width, symmetric, gear, slot and hinge), exploded views with exact steps, component listing and interference check |
+| Assemblies | Insert components, mates (coincident, concentric, distance, angle, parallel, perpendicular, tangent, lock, and limit distance and angle for travel stops, width, symmetric, gear, slot, hinge, rack and pinion, screw and universal joint), exploded views with exact steps, component listing and interference check |
 | Every client | `solidworks-mcp install` configures Claude Code, Claude Desktop, Codex CLI, Cursor, VS Code, Windsurf, Gemini CLI and opencode |
 
 ## Install
@@ -115,7 +115,7 @@ All lengths are millimetres and all angles degrees, in both directions, whatever
 | Engineering data | `list_materials`, `set_material`, `custom_properties` |
 | GD&T | `add_datum`, `add_datum_target`, `add_geometric_tolerance` (incl. composite frames and projected zones), `add_surface_finish`, `add_note` |
 | Drawings | `create_drawing`, `drawing_views`, `section_view`, `detail_view`, `projected_view`, `auxiliary_view`, `broken_view`, `breakout_section`, `add_view` (model or flat pattern), `sheets`, `drawing_dimension`, `drawing_table` (BOM with balloons, revision block, hole table) |
-| Assemblies | `insert_component`, `list_components`, `add_mate` (including limit, width, symmetric, gear, slot and hinge mates), `exploded_view`, `interference_check`, `bom` (parts list with mass budget) |
+| Assemblies | `insert_component`, `list_components`, `add_mate` (including limit, width, symmetric, gear, slot, hinge, rack and pinion, screw and universal joint mates), `exploded_view`, `interference_check`, `bom` (parts list with mass budget) |
 
 85 tools and one prompt (`design`) in total. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`) so clients can approve reads automatically and ask before deleting or closing.
 
@@ -185,7 +185,7 @@ The tools cover the common path from a blank part to a released drawing. Plenty 
 - **Design judgement.** The guide gives rules of thumb and a worked recipe, not analysis. Strength, vibration, thermal and airworthiness decisions stay with engineers.
 - **Drawings beyond the basics.** Aligned (rotated) section views are not available, dimensions can be added but not moved or restyled afterwards, and the title block is filled only through custom properties. Imported annotations and tables placed without a position often overlap views and need tidying by hand. Reference dimensions and auxiliary views in assembly drawings need component references (`edge@Part-1/x,y,z`) and have only been tested on parts.
 - **Advanced GD&T and MBD.** There is no DimXpert auto-dimensioning, tolerance stack-up analysis, 3D PMI views or annotation views, and frames have no all-around, between or unequally disposed profile modifiers.
-- **Advanced assembly work.** Cam, rack and pinion, screw, path and universal joint mates, radial or rotating explode steps, motion studies and sub-assembly restructuring are not available. Explode steps move along the assembly X, Y and Z axes.
+- **Advanced assembly work.** Cam and path mates, radial or rotating explode steps, motion studies and sub-assembly restructuring are not available. Explode steps move along the assembly X, Y and Z axes.
 - **Analysis.** It cannot run SolidWorks Simulation, Flow Simulation, Costing or DFM checks. Mass properties, measurement, interference and the body check are the analysis tools available.
 - **Data management.** There is no SOLIDWORKS PDM or vault access, check-in, revision workflow or ECO handling.
 - **Seeing and clicking.** The agent sees the model through `screenshot` images and the JSON returned by tools. It cannot click in the SolidWorks window, and there is deliberately no way to run macros or arbitrary API calls to get around a missing tool.

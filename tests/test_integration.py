@@ -527,6 +527,22 @@ def test_advanced_mates_and_explode(tmp_path: Path):
             assert hinge["type"] == "hinge"
             comps = {r["name"]: r["origin_mm"] for r in (await c.call("list_components"))["components"]}
             assert comps["slotplate-2"][0] == pytest.approx(0) and comps["slotplate-2"][2] == pytest.approx(0)  # pivots on the hole axis
+            # a jackscrew: 2 mm lead, so 0.5 mm of travel turns the screw a quarter turn
+            await part("nut.sldprt", [{"type": "rectangle", "corner1": [-15, -15], "corner2": [15, 15]},
+                                      {"type": "circle", "center": [0, 0], "diameter": 8}], "plane:Top", 10)
+            await part("jackscrew.sldprt", [{"type": "circle", "center": [0, 0], "diameter": 8}], "plane:Top", 60)
+            await c.call("insert_component", path="nut.sldprt", position=[0, -200, 0])
+            await c.call("add_mate", type="lock", refs=["comp:nut-1", "comp:rail-1"])
+            await c.call("insert_component", path="jackscrew.sldprt", position=[0, -220, 0])
+            await c.call("add_mate", type="concentric", refs=["face@nut-1/0,-195,4", "face@jackscrew-1/0,-210,-4"])
+            assert (await c.call("add_mate", type="screw", refs=["face@nut-1/0,-195,4", "face@jackscrew-1/0,-210,-4"], distance=2))["mate"]
+            travel = await c.call("add_mate", type="distance", refs=["face@nut-1/10,-200,10", "face@jackscrew-1/0,-220,-3"], distance=20)
+            await c.call("set_dimensions", values={f"D1@{travel['mate']}": 20.5})
+            screw_dims = (await c.call("dimensions", feature="Mates"))["dimensions"]["Mates"]
+            assert any(d["name"].startswith("D1@Screw") and d["value"] == 2.0 for d in screw_dims)
+            await c.call("insert_component", path="gear20.sldprt", position=[0, 120, 0])
+            rack = await c.call("add_mate", type="rack_pinion", refs=["edge@rail-1/0,10,10", "face@gear20-2/10,120,2.5"], distance=20)
+            assert rack["mate"].startswith("RackPinion")
             # GD&T on assembly components
             await c.call("add_datum", face="face@rail-1/0,0,0", label="A")
             frame = await c.call("add_geometric_tolerance", face="face@rail-1/0,10,0", characteristic="parallelism", tolerance=0.05, datums=["A"])

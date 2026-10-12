@@ -56,7 +56,7 @@ Typical part workflow:
    detail_view, projected_view, auxiliary_view, broken_view, breakout_section, add_view (incl. flat_pattern), sheets, drawing_dimension,
    drawing_table (bom with balloons, revision block, hole table).
 Assemblies: insert_component (origin at position), add_mate (incl. limit_distance/limit_angle travel stops, width,
-symmetric, gear, slot, hinge), exploded_view, list_components, interference_check, bom (mass budget).
+symmetric, gear, slot, hinge, rack_pinion, screw, universal_joint), exploded_view, list_components, interference_check, bom (mass budget).
 Results are proposals for an engineer to review; check every model and drawing before release.
 """
 
