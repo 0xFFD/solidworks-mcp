@@ -31,7 +31,8 @@ All notable changes to this project are documented here. The format follows
   model view or a sheet metal flat pattern with bend lines and notes), `sheets` (add and activate sheets),
   `drawing_dimension` (reference dimensions between model edges in a view) and `drawing_table` (bill of
   materials with balloons, revision block with revision rows, hole table with tags and callouts).
-  `broken_view` shortens long parts between two model points.
+  `broken_view` shortens long parts between two model points, and `breakout_section` cuts away a circular
+  region of a view to a depth to show bores and pockets.
   `drawing_views` lists the sheets, and `section_view` reports the number of cut faces and warns when the
   cutting line misses the part.
 - Assemblies: `add_mate` adds limit distance and limit angle mates (travel stops), width, symmetric, gear,

@@ -969,3 +969,41 @@ def broken_view(
     out = _view_result(v)
     out["outline_before_mm"] = before
     return out
+
+
+@tool(WRITES)
+def breakout_section(
+    view: Annotated[str, Field(description="View name.")],
+    center: Annotated[list[float], Field(description="Centre of the cut-away region as a model point [x, y, z] in mm.")],
+    radius: Annotated[float, Field(gt=0, description="Radius of the circular cut-away region in model mm.")],
+    depth: Annotated[float, Field(gt=0, description="How deep to cut, in model mm from the front of the part as seen in the view (reach the bore, pocket or thread to show).")],
+) -> dict:
+    """Break-out section: cut away a circular region of a view to a depth, showing an internal bore, pocket
+    or insert without a separate section view."""
+    doc = SW.active("drawing")
+    drw = SW.drawing(doc)
+    v = _view(drw, view)
+    sx, sy = _view_sketch_xy(v, *_to_sheet(v, center))
+    if not drw.ActivateView(view):
+        raise SwError(f"Could not activate {view}.")
+    sm = doc.SketchManager
+    sm.AddToDB = True
+    try:
+        circ = sm.CreateCircleByRadius(sx, sy, 0, mm(radius))
+    finally:
+        sm.AddToDB = False
+    if circ is None:
+        raise SwError("Could not sketch the break-out region.")
+    hatched = v.GetFaceHatchCount()
+    doc.ClearSelection2(True)
+    SW.cast(circ, "ISketchSegment").Select4(False, None)
+    made = drw.CreateBreakOutSection(mm(depth))
+    doc.ClearSelection2(True)
+    doc.ForceRebuild3(True)
+    if made is None:
+        raise SwError("SolidWorks could not create the break-out section; the region must overlap the part in the view.")
+    out = _view_result(v)
+    out["cut_faces"] = v.GetFaceHatchCount() - hatched
+    if out["cut_faces"] <= 0:
+        out["warning"] = "The break-out cut no material; increase depth or move the centre onto the part."
+    return out
