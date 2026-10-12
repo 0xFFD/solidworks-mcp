@@ -1275,6 +1275,36 @@ def test_knit_and_thicken(tmp_path: Path):
             assert box["solid_bodies"] == 1 and box["volume_mm3"] == pytest.approx(40 * 30 * 20)
         finally:
             await c.call("close_document")
+        # an open duct capped with fill surfaces and knitted solid
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [0, 0], "corner2": [40, 30]}])
+            await c.call("finish_sketch")
+            await c.call("surface", kind="extrude", sketch="Sketch1", depth=20)
+            cap = await c.call("fill_surface", edges=["edge@20,20,0", "edge@40,20,-15", "edge@20,20,-30", "edge@0,20,-15"])
+            assert cap["patch"]["area_mm2"] == pytest.approx(1200)
+            closed = await c.call("fill_surface", edges=["edge@20,0,0", "edge@40,0,-15", "edge@20,0,-30", "edge@0,0,-15"], knit=True)
+            assert closed["knit"]["volume_mm3"] == pytest.approx(24000)
+        finally:
+            await c.call("close_document")
+        # a skin trimmed by a cutting surface, keeping either side
+        for keep, area in (([25, 0, 0], 30 * 50), ([-20, 0, 0], 50 * 50)):
+            await c.call("new_document", kind="part")
+            try:
+                await c.call("start_sketch", on="plane:Top")
+                await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-40, -25], "corner2": [40, 25]}])
+                await c.call("finish_sketch")
+                await c.call("surface", kind="planar")
+                plane = (await c.call("ref_plane", mode="offset", refs=["plane:Top"], distance=5, flip=True))["feature"]
+                await c.call("start_sketch", on=plane)
+                await c.call("sketch", coords="model", entities=[{"type": "line", "from": [10, -5, -40], "to": [10, -5, 40]}])
+                await c.call("finish_sketch")
+                await c.call("surface", kind="extrude", depth=10)
+                t = await c.call("trim_surface", target="body:Surface-Plane1", tool_body="body:Surface-Extrude1", keep=keep)
+                assert t["area_mm2"] == pytest.approx(area)
+            finally:
+                await c.call("close_document")
 
     run(tmp_path, body)
 

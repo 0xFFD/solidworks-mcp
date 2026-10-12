@@ -117,9 +117,13 @@ def faces(doc: Any, component: str | None = None) -> list[Any]:
 
 
 def edges(doc: Any, component: str | None = None) -> list[Any]:
+    """Edges of the solid bodies, then of a part's surface bodies (after them, so solid edge indices stay put)."""
     out: list[Any] = []
     for b in bodies(doc, component):
         out += SW.cast_all(b.GetEdges(), "IEdge")
+    if not component:
+        for b in surface_bodies(doc):
+            out += SW.cast_all(b.GetEdges(), "IEdge")
     return out
 
 

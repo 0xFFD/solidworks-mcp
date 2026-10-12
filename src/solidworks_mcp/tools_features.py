@@ -1490,3 +1490,96 @@ def move_faces(
     if before is not None and out.get("volume_mm3") == before:
         raise SwError("The face move changed nothing.")
     return out
+
+
+@tool(WRITES)
+def fill_surface(
+    edges: Annotated[list[str], Field(min_length=1, description="Closed loop of boundary edges to fill ('edge@x,y,z'), of solids or surfaces.")],
+    knit: Annotated[bool, Field(description="Knit the patch to the surfaces it borders (and make a solid if that closes a volume).")] = False,
+) -> dict:
+    """Patch a surface across a closed loop of edges: close openings in skins, cap ducts and fairings, repair
+    missing faces of imported models."""
+    doc = SW.active("part")
+    objs = [g.resolve(doc, e).obj for e in edges]
+    before = {b.Name for b in g.surface_bodies(doc)}
+    import pythoncom
+    from win32com.client import VARIANT
+
+    doc.ClearSelection2(True)
+    feat = doc.FeatureManager.InsertFillSurface2(1, 0, _dispatch_array(objs), VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_I4, [0] * len(objs)), None, None)
+    out = result(doc, feat, "fill surface", "The edges must form one closed loop.")
+    new = [b for b in g.surface_bodies(doc) if b.Name not in before]
+    if not new:
+        raise SwError("The fill made no surface; the edges must form one closed loop.")
+    out["patch"] = {"name": new[0].Name, "area_mm2": round(sum(SW.cast(fc, "IFace2").GetArea() for fc in SW.cast_all(new[0].GetFaces(), "IFace2")) * 1e6, 3)}
+    if knit:
+        out["knit"] = knit_surfaces(form_solid=True) if len(g.surface_bodies(doc)) > 1 else None
+    return out
+
+
+@tool(WRITES)
+def trim_surface(
+    target: Annotated[str, Field(description="Surface body to trim ('body:Name').")],
+    tool_body: Annotated[str, Field(description="Surface body that cuts it ('body:Name').")],
+    keep: Annotated[list[float], Field(min_length=3, max_length=3, description="A point [x, y, z] mm on the piece of the target to keep.")],
+) -> dict:
+    """Trim a surface body with another surface and keep one piece: cut skins to a boundary, open windows and
+    access panels in fairings, shape surfaces before knitting them into a solid."""
+    doc = SW.active("part")
+    fm = doc.FeatureManager
+    p = [mm(c) for c in keep]
+    tname = target.removeprefix("body:")
+    tool_ref = tool_body if tool_body.startswith("body:") else f"body:{tool_body}"
+
+    def on_body(body: Any) -> bool:
+        return any(math.dist(p, list(f.GetClosestPointOn(*p))[:3]) < 1e-5 for f in SW.cast_all(body.GetFaces(), "IFace2"))
+
+    # SolidWorks ignores which piece is picked: the keep mode keeps the first temporary piece and the remove
+    # mode the other, so choose the mode from where the point lies before committing the trim
+    tgt = g.resolve(doc, f"body:{tname}").obj
+    tl = g.resolve(doc, tool_ref).obj
+
+    def pre(remove: bool) -> list[Any]:
+        doc.ClearSelection2(True)
+        sm = SW.cast(doc.SelectionManager, "ISelectionMgr")
+        for b_, m in ((tl, 1), (tgt, 2)):
+            data = SW.cast(sm.CreateSelectData(), "ISelectData")
+            data.Mark = m
+            SW.cast(b_, "IBody2").Select2(True, data)
+        if not fm.PreTrimSurface(False, False, False, remove):
+            doc.ClearSelection2(True)
+            raise SwError("SolidWorks could not trim: the tool surface must cross the target.")
+        return SW.cast_all(fm.GetPreTrimmedBodies(tgt) or [], "IBody2")
+
+    def holds(body: Any) -> bool:
+        box = list(body.GetBodyBox())
+        return all(box[i] - 1e-6 <= p[i] <= box[i + 3] + 1e-6 for i in range(3))
+
+    pieces = pre(False)
+    if len(pieces) != 2:
+        doc.ClearSelection2(True)
+        raise SwError("The tool surface must cut the target into two pieces." if len(pieces) < 2 else
+                      "The tool cuts the target into more than two pieces; trim in steps with one boundary each.")
+    if not holds(pieces[0]):
+        if not holds(pieces[1]):
+            doc.ClearSelection2(True)
+            raise SwError(f"{keep} is not on either piece of the target.")
+        pre(True)
+    else:
+        # in the keep mode the post-trim needs a piece picked, although which one does not decide the result
+        data = SW.cast(SW.cast(doc.SelectionManager, "ISelectionMgr").CreateSelectData(), "ISelectData")
+        data.Mark = 2
+        pieces[0].Select2(True, data)
+    feat = fm.PostTrimSurface(False)
+    doc.ClearSelection2(True)
+    if feat is None:
+        raise SwError("SolidWorks could not trim the surface.")
+    feat = SW.cast(feat, "IFeature")
+    kept = [x for x in g.surface_bodies(doc) if x.Name == feat.Name]
+    if not kept or not on_body(kept[0]):
+        feat.Select2(False, 0)
+        doc.Extension.DeleteSelection2(SW.C.swDelete_Absorbed)
+        raise SwError(f"SolidWorks kept the other piece; nothing was changed. Check that {keep} lies on the target.")
+    out = result(doc, feat, "surface trim")
+    out["area_mm2"] = round(sum(f.GetArea() for f in SW.cast_all(kept[0].GetFaces(), "IFace2")) * 1e6, 3)
+    return out

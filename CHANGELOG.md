@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `fill_surface` patches a closed loop of edges (optionally knitting into a solid) and `trim_surface` trims a surface
+  with another and keeps the piece holding a given point; surface edges are now addressable as `edge@x,y,z`.
 - Direct editing: `delete_faces` removes and heals faces (holes, pockets, fillets; the halves of split cylinders
   on imports are found automatically) and `move_faces` offsets faces, on native and imported bodies alike.
 - `knit_surfaces` joins surface bodies, into a solid when they enclose a volume, and `thicken` turns a surface
