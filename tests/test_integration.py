@@ -966,6 +966,13 @@ def test_radial_explode(tmp_path: Path):
             for k, b in before.items():  # each part moves 30 mm further out along its own radius
                 assert after[k] == pytest.approx([v * 2.5 for v in b])
             assert "two or more components" in await c.fails("exploded_view", steps=[{"components": ["nub-1"], "radial": True, "distance": 30}])
+            await c.call("exploded_view", show=False)
+            # group two of the ring into a kit for the BOM, then dissolve it again; nothing may move
+            kit = await c.call("subassembly", action="form", components=["nub-1", "nub-2"], name="Nub-Kit")
+            assert kit["subassembly"].startswith("Nub-Kit") and sum("/" in n for n in kit["components"]) == 2
+            assert any(line["file"].startswith("Nub-Kit") for line in (await c.call("bom"))["lines"])
+            flat = await c.call("subassembly", action="dissolve", name="Nub-Kit")
+            assert not any("/" in n for n in flat["components"]) and len(flat["components"]) == 4
         finally:
             await c.call("close_document")
 

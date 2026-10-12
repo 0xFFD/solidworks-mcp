@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from . import geometry as g
-from .com import SW, const_name, mm, rad, to_mm
+from .com import SW, const_name, doc_kind, mm, rad, to_mm
 from .errors import SwError
 from .registry import READ_ONLY, WRITES, app, tool
 from .tools_doc import NATIVE, load_failure
@@ -398,3 +398,68 @@ def interference_check(
     finally:
         mgr.Done()
     return {"interferences": len(rows), "items": rows}
+
+
+def _boxes(doc) -> list[tuple[float, ...]]:
+    """Sorted world bounding boxes of every part instance, to check a restructure moved nothing."""
+    out = []
+    for c in g.components(doc):
+        if SW.cast(c.GetModelDoc2(), "IModelDoc2") is not None and doc_kind(SW.cast(c.GetModelDoc2(), "IModelDoc2")) == "part":
+            box = c.GetBox(False, False)
+            if box:
+                out.append(tuple(round(v * 1000, 3) for v in list(box)[:6]))
+    return sorted(out)
+
+
+@tool(WRITES)
+def subassembly(
+    action: Annotated[Literal["form", "dissolve"], Field(description=(
+        "form: move components into a new sub-assembly (stored inside the assembly until saved out); "
+        "dissolve: move a sub-assembly's components up into its parent and remove it."))],
+    components: Annotated[list[str] | None, Field(description="form: the components to group, e.g. ['Bolt-1', 'Nut-1'].")] = None,
+    name: Annotated[str | None, Field(description="form: name of the new sub-assembly (e.g. 'Hinge-Kit'). dissolve: the sub-assembly to dissolve.")] = None,
+) -> dict:
+    """Restructure an assembly's tree for the build and the indented BOM: group components into a new
+    sub-assembly (a kit, an installation) or dissolve one. Components keep their positions."""
+    from .tools_features import _dispatch_array
+
+    doc = SW.active("assembly")
+    asm = SW.assembly(doc)
+    before = _boxes(doc)
+    if action == "form":
+        if not components:
+            raise SwError("Give the components to group.")
+        comps = [g.find_component(doc, c) for c in components]
+        existing = {c.Name2 for c in g.components(doc)}
+        doc.ClearSelection2(True)
+        asm.InsertNewAssembly("")  # an empty virtual sub-assembly, saved inside this assembly
+        new = [c for c in g.components(doc) if c.Name2 not in existing]
+        if len(new) != 1:
+            raise SwError("SolidWorks could not create the sub-assembly.")
+        sub = new[0]
+        if not asm.ReorganizeComponents(_dispatch_array(comps), sub):
+            doc.ClearSelection2(True)
+            sub.Select4(False, None, False)
+            doc.Extension.DeleteSelection2(SW.C.swDelete_Absorbed)
+            raise SwError("SolidWorks could not move the components into the new sub-assembly (they must be top-level components).")
+        if name:
+            sub.Name2 = name
+        doc.EditRebuild3()
+        label = sub.Name2
+    else:
+        if not name:
+            raise SwError("Give the sub-assembly to dissolve (name=).")
+        # a virtual sub-assembly is named 'Name^Parent-1'; accept the plain name too
+        sub = next((c for c in g.components(doc) if "/" not in c.Name2 and c.Name2.split("^")[0] == name), None) or g.find_component(doc, name)
+        label = sub.Name2
+        doc.ClearSelection2(True)
+        sub.Select4(False, None, False)
+        if not asm.DissolveSubAssembly():
+            doc.ClearSelection2(True)
+            raise SwError(f"SolidWorks could not dissolve {name}.")
+        doc.EditRebuild3()
+    doc.ClearSelection2(True)
+    after = _boxes(doc)
+    if after != before:
+        raise SwError("The restructure moved components; undo it in SolidWorks and check the mates of the moved components.")
+    return {"action": action, "subassembly": label, "components": [c.Name2 for c in g.components(doc)]}

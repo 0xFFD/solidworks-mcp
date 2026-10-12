@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `subassembly` forms a new sub-assembly from chosen components (kits and installations for the indented BOM)
+  or dissolves one, checking that no component moved.
 - Relations in 3D sketches: `modify_sketch` takes `seg@x,y,z` / `pt@x,y,z` (model mm) and the `along_x`, `along_y`,
   `along_z` relations.
 - `trim_members` trims or extends weldment members from separate sketches to meet at mitred or butted corners.
