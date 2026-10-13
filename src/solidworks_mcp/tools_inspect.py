@@ -227,11 +227,18 @@ def feature_action(
     action: Annotated[Literal["suppress", "unsuppress", "delete"], Field(description="delete also removes the feature's absorbed sketches.")],
     configurations: Annotated[list[str] | None, Field(description="Suppress/unsuppress only in these configurations; default is all.")] = None,
 ) -> dict:
-    """Suppress, unsuppress or delete features (suppression per configuration makes part variants)."""
+    """Suppress, unsuppress or delete features, or assembly components (suppression per configuration makes
+    part and assembly variants, e.g. a build without an optional bracket)."""
     doc = SW.active()
     C = SW.C
     where, names = _config_scope(doc, configurations, C.swAllConfiguration, C.swSpecifyConfiguration)
     done = []
+    if doc_kind(doc) == "assembly" and action != "delete":
+        comps = {c.Name2: c for c in g.components(doc)}
+        if comp_names := [n for n in features if n in comps]:
+            _suppress_components(doc, comp_names, action == "suppress", configurations)
+            done += comp_names
+            features = [n for n in features if n not in comps]
     for n in features:
         f = g.feature_by_name(doc, n)
         if f is None:
@@ -249,6 +256,26 @@ def feature_action(
     doc.ClearSelection2(True)
     doc.EditRebuild3()
     return {action: done}
+
+
+def _suppress_components(doc: Any, names: list[str], suppress: bool, configurations: list[str] | None) -> None:
+    """Component suppression is per configuration and only through the active one (the component's feature
+    accepts SetSuppression2 and changes nothing), so each configuration is activated in turn."""
+    C = SW.C
+    cm = SW.cast(doc.ConfigurationManager, "IConfigurationManager")
+    start = SW.cast(cm.ActiveConfiguration, "IConfiguration").Name
+    state = C.swComponentSuppressed if suppress else C.swComponentFullyResolved
+    try:
+        for cfg in configurations or _config_names(doc):
+            doc.ShowConfiguration2(cfg)
+            for n in names:
+                comp = g.find_component(doc, n)
+                comp.SetSuppression2(state)
+                if bool(comp.IsSuppressed()) != suppress:
+                    raise SwError(f"SolidWorks did not {'suppress' if suppress else 'unsuppress'} {n} in {cfg}.")
+            doc.EditRebuild3()
+    finally:
+        doc.ShowConfiguration2(start)
 
 
 def _config_names(doc: Any) -> list[str]:

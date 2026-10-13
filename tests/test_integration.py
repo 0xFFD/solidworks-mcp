@@ -2259,3 +2259,30 @@ def test_core_features_revolve_shell_draft(tmp_path: Path):
             await c.call("close_document", name=name)
 
     run(tmp_path, body)
+
+
+def test_assembly_configuration_suppresses_component(tmp_path: Path):
+    """A build variant without one component: suppressed in that configuration only, with BOM and mass to match."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-2, -2], "corner2": [2, 2]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=4)
+        await c.call("save_document", path="lug.sldprt")
+        await c.call("close_document")
+        await c.call("new_document", kind="assembly")
+        try:
+            for p in ([0, 0, 0], [20, 0, 0], [40, 0, 0]):
+                await c.call("insert_component", path="lug.sldprt", position=p)
+            await c.call("configurations", action="add", name="Light", description="Two lugs")
+            await c.call("feature_action", features=["lug-3"], action="suppress", configurations=["Light"])
+            assert [line["qty"] for line in (await c.call("bom"))["lines"]] == [2]
+            assert (await c.call("mass_properties"))["volume_mm3"] == pytest.approx(2 * 64)
+            await c.call("configurations", action="activate", name="Default")
+            assert [line["qty"] for line in (await c.call("bom"))["lines"]] == [3]  # the other configuration keeps it
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)

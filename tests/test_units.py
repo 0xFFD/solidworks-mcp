@@ -370,3 +370,13 @@ def test_material_search_synonyms():
 
     assert "cfrp" in _material_terms("Carbon fibre") and "aramid" in _material_terms("kevlar")
     assert _material_terms("7075") == ["7075"]
+
+
+def test_engraving_font_must_be_installed():
+    from solidworks_mcp.tools_sketch import _check_font
+
+    _check_font("Arial")  # every Windows install has it
+    with pytest.raises(SwError, match="not installed"):
+        _check_font("NoSuchFont123")
+    with pytest.raises(SwError, match="arial"):
+        _check_font("Arail")  # a typo gets a suggestion

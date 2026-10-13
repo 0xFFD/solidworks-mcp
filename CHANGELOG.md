@@ -181,6 +181,10 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- `feature_action(suppress)` on an assembly component reported success and changed nothing; components are now
+  suppressed (or unsuppressed) in each requested configuration, checked, with the active one restored.
+- Engraved text with a font that is not installed was drawn in a substitute font without notice; the font is now
+  checked against the installed fonts and a misspelt name gets suggestions.
 - `hole(size='Ø4', fastener='drill')` silently drilled Ø0.4 and 'Ø10' was refused: whole drill sizes are now written
   as the tables have them ('Ø4.0'), other spellings are tried where SolidWorks refuses one, and a hole is kept only
   when its size is the one asked for (otherwise nothing is created and the error says what SolidWorks offered).

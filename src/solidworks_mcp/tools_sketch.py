@@ -117,6 +117,38 @@ _GLYPH_ADVANCE = {
 }
 
 
+_FONTS: set[str] | None = None
+
+
+def _check_font(name: str) -> None:
+    """Refuse a font Windows does not have: SolidWorks stores any name, and the text would then be drawn in a
+    substitute font with different glyph shapes and widths."""
+    global _FONTS
+    if _FONTS is None:
+        import re
+        import winreg
+
+        fonts: set[str] = set()
+        for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(root, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts") as k:
+                    for i in range(winreg.QueryInfoKey(k)[1]):
+                        for fam in winreg.EnumValue(k, i)[0].split("&"):  # 'Arial Bold (TrueType)', 'Cambria & Cambria Math'
+                            fonts.add(re.sub(r"\s*\(.*?\)\s*$", "", fam).strip().lower())
+            except OSError:
+                continue
+        _FONTS = fonts
+    if not _FONTS:
+        return
+    want = name.strip().lower()
+    if not any(f == want or f.startswith(want + " ") for f in _FONTS):
+        import difflib
+
+        near = difflib.get_close_matches(want, sorted(_FONTS), n=4, cutoff=0.6)
+        raise SwError(f"Font '{name}' is not installed" + (f"; close: {', '.join(near)}." if near else ".") +
+                      " Windows would draw the text in a substitute font.")
+
+
 def _arc_text(doc: Any, sm: Any, e: dict) -> list[Any]:
     """Text along a circle (markings on round housings, flanges, bosses): each character is measured upright,
     then turned to the tangent and placed by arc length, centred on arc.angle. Clockwise text reads across the top
@@ -132,6 +164,8 @@ def _arc_text(doc: Any, sm: Any, e: dict) -> list[Any]:
         raise SwError("text.arc needs center: [x, y] and radius (mm).") from None
     if r <= 0:
         raise SwError("text.arc radius must be above 0.")
+    if e.get("font"):
+        _check_font(str(e["font"]))
     cw = str(arc.get("direction", "cw")).lower() != "ccw"
     mid = math.radians(float(arc.get("angle", 90 if cw else 270)))
     h = mm(e.get("height", 5))
@@ -333,6 +367,8 @@ def _add(doc: Any, sm: Any, e: dict) -> list:
         txt = str(e.get("text", ""))
         if not txt:
             raise SwError("text needs a non-empty text.")
+        if e.get("font"):
+            _check_font(str(e["font"]))
         # One text entity per character: in a single text entity adjacent glyph outlines can touch, and
         # SolidWorks then refuses to extrude or cut the whole string. Each glyph is measured from its outline
         # and the next one starts a fixed gap after it, so any font is spaced like normal text.
