@@ -964,6 +964,12 @@ def test_dimxpert_schemes(tmp_path: Path):
             assert got[hole]["plus"] == pytest.approx(0.05) and got[hole]["minus"] == pytest.approx(0)
             assert got[spaced]["plus"] == pytest.approx(0.1) and got[spaced]["minus"] == pytest.approx(-0.1)
             assert "No DimXpert annotation" in await c.fails("dimxpert", action="set_tolerance", tolerances={"Nothing1": {"plus": 0.1}})
+            # the scheme comes onto the drawing with its tolerances (MBD to 2D)
+            await c.call("save_document", path="dx_plate.sldprt")
+            d = await c.call("create_drawing", sheet="A3", isometric=False)
+            shown = [x for v in d["views"] for x in (await c.call("view_dimensions", view=v["name"]))["dimensions"]]
+            assert any(x["value"] == pytest.approx(6.6) and (x.get("tolerance") or {}).get("plus") == pytest.approx(0.05) for x in shown)
+            await c.call("close_document")
             assert (await c.call("dimxpert", action="clear"))["annotations"] == []
             assert "1 to 3 datum faces" in await c.fails("dimxpert")
         finally:
@@ -1263,6 +1269,9 @@ def test_gauges_and_configuration_table(tmp_path: Path):
             await c.call("create_drawing", sheet="A3", isometric=False)
             tab = await c.call("drawing_table", kind="general", dimensions={length: "L", thick: "T"}, position=[330, 120])
             assert tab["cells"][0] == ["CONFIG", "L", "T"] and ["-003", "120", "8"] in tab["cells"]
+            dash = await c.call("drawing_table", kind="general", dimensions={length: "L", thick: "T"}, configurations=["-001", "-002", "-003"], position=[330, 60])
+            assert [r[0] for r in dash["cells"][1:]] == ["-001", "-002", "-003"]  # only the dash numbers, in order
+            assert "No configuration -009" in await c.fails("drawing_table", kind="general", dimensions={length: "L"}, configurations=["-009"])
             assert "needs cells" in await c.fails("drawing_table", kind="general")
             await c.call("close_document")
         finally:

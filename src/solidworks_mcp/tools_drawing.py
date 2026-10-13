@@ -839,7 +839,11 @@ def create_drawing(
         for n in ("swInsertDimensionsMarkedForDrawing", "swInsertDatums", "swInsertDatumTargets", "swInsertGTols", "swInsertSFSymbols", "swInsertNotes",
                   "swInsertCThreads", "swInsertHoleWizardProfileDimensions", "swInsertHoleWizardLocationDimensions", "swInsertholeCallout"):
             types |= getattr(C, n)
-        drw.InsertModelAnnotations3(C.swImportModelItemsFromEntireModel, types, True, True, False, False)
+        # InsertAllAnnotations also brings the model's annotation views: DimXpert schemes and MBD annotations
+        try:
+            drw.InsertModelAnnotations4(C.swImportModelItemsFromEntireModel, types, True, True, False, False, True, False)
+        except AttributeError:
+            drw.InsertModelAnnotations3(C.swImportModelItemsFromEntireModel, types, True, True, False, False)
     doc.ForceRebuild3(True)
     tidy = _tidy_annotations(doc, drw) if annotations else None
     doc.ViewZoomtofit2()
@@ -1541,6 +1545,8 @@ def drawing_table(
     dimensions: Annotated[dict[str, str] | None, Field(description=(
         "general: a tabulated drawing table of the model's configurations instead of cells, {dimension: column heading}, "
         "e.g. {'D1@Sketch1': 'L', 'D1@Boss-Extrude1': 'T'}; one row per configuration."))] = None,
+    configurations: Annotated[list[str] | None, Field(description=(
+        "general with dimensions: the configurations to tabulate, in order (e.g. ['-001', '-002']); default every one."))] = None,
 ) -> dict:
     """Tables on the active drawing sheet: bill of materials with balloons, revision block with revision
     rows, or a hole table with tags, positions from a datum corner and hole callouts."""
@@ -1569,6 +1575,11 @@ def drawing_table(
                 rows = configuration_table(columns=list(dimensions))["configurations"]
             finally:
                 SW.app.ActivateDoc3(here, False, 0, 0)
+            if configurations:
+                by_cfg = {r["config"]: r for r in rows}
+                if missing := [c for c in configurations if c not in by_cfg]:
+                    raise SwError(f"No configuration {', '.join(missing)}; the model has {', '.join(by_cfg)}.")
+                rows = [by_cfg[c] for c in configurations]
             cells = [["CONFIG", *dimensions.values()]] + [[r["config"], *[f"{r[k]:g}" for k in dimensions]] for r in rows]
         if not cells or not cells[0]:
             raise SwError("A general table needs cells (rows of text) or dimensions (to tabulate configurations).")

@@ -363,3 +363,10 @@ def test_tolerance_stack_expression_tool():
     assert r["monte_carlo"]["samples"] == 5000 and 0 < r["monte_carlo"]["inside_fraction"] <= 1
     with pytest.raises(SwError, match="own name"):
         tolerance_stack(expression="a + b", contributors=[{"nominal": 1, "plus": 0.1}, {"name": "b", "nominal": 1}])
+
+
+def test_material_search_synonyms():
+    from solidworks_mcp.tools_doc import _material_terms
+
+    assert "cfrp" in _material_terms("Carbon fibre") and "aramid" in _material_terms("kevlar")
+    assert _material_terms("7075") == ["7075"]

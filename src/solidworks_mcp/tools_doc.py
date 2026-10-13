@@ -514,7 +514,7 @@ def materials() -> list[dict]:
 
 @tool(READ_ONLY)
 def list_materials(
-    search: Annotated[str | None, Field(description="Case-insensitive text to match in the material or class name, e.g. '7075', 'titanium', 'CFRP', 'PA12', 'generic'.")] = None,
+    search: Annotated[str | None, Field(description="Case-insensitive text to match in the material or class name, e.g. '7075', 'titanium', 'CFRP', 'PA12', 'generic'; everyday names such as 'carbon fibre', 'kevlar' or 'fibreglass' also find their technical names.")] = None,
     limit: Annotated[int, Field(ge=1, le=500)] = 60,
 ) -> dict:
     """Materials available in the SolidWorks material databases, with density, yield and tensile strength.
@@ -522,9 +522,24 @@ def list_materials(
     (CFRP laminates, aramid, G10/FR4, PA12, PEEK-CF): approximate values for sizing and mass budgets."""
     mats = materials()
     if search:
-        s = search.lower()
-        mats = [m for m in mats if s in (m["name"] or "").lower() or s in (m["class"] or "").lower()]
+        terms = _material_terms(search)
+        mats = [m for m in mats if any(t in (m["name"] or "").lower() or t in (m["class"] or "").lower() for t in terms)]
     return {"count": len(mats), "materials": mats[:limit]}
+
+
+# everyday names for what the databases list under trade or technical names
+_MATERIAL_SYNONYMS = {
+    "carbon fibre": ["cfrp", "carbon cloth"], "carbon fiber": ["cfrp", "carbon cloth"], "carbon composite": ["cfrp"],
+    "composite": ["cfrp", "gfrp", "aramid", "glass-epoxy"], "glass fibre": ["gfrp", "glass-epoxy", "fr4"], "glass fiber": ["gfrp", "glass-epoxy", "fr4"],
+    "fibreglass": ["gfrp", "glass-epoxy"], "fiberglass": ["gfrp", "glass-epoxy"], "kevlar": ["aramid"],
+    "titanium": ["ti-", "titanium"], "aluminium": ["aluminum", "alloy", "6061", "7075", "2024"], "foam": ["foam"],
+    "stainless": ["stainless", "aisi 3", "17-4", "15-5"], "nylon": ["pa12", "nylon"], "carbon": ["cfrp", "carbon"],
+}
+
+
+def _material_terms(search: str) -> list[str]:
+    s = search.lower().strip()
+    return [s] + [t for key, alts in _MATERIAL_SYNONYMS.items() if key == s or key in s for t in alts]
 
 
 @tool(WRITES)

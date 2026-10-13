@@ -177,12 +177,14 @@ def dimensions(
     feats = [g.feature_by_name(doc, feature)] if feature else list(g.iter_features(doc))
     if feature and feats[0] is None:
         raise SwError(f"No feature named '{feature}'.")
+    seen: set[str] = set()  # a sketch's dimensions also show under the feature built on it: list each once
     for f in feats:
         dims = _dims_of(f)
         sub = SW.cast(f.GetFirstSubFeature(), "IFeature")
         while sub is not None:
             dims += _dims_of(sub)
             sub = SW.cast(sub.GetNextSubFeature(), "IFeature")
+        dims = [d for d in dims if not (d["name"] in seen or seen.add(d["name"]))]
         if dims:
             out[f.Name] = dims
     return {"dimensions": out}

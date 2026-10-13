@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `list_materials` search understands everyday names: 'carbon fibre' finds the CFRP laminates, 'kevlar' aramid,
+  'fibreglass' the glass laminates, 'titanium' the Ti- alloys.
+- `drawing_table(kind='general', dimensions=..., configurations=[...])` tabulates only the chosen configurations
+  (the dash numbers, without Default), in the given order.
 - `drawing_table(kind='cut_list')` puts a weldment cut list (item, quantity, description, length) on the drawing, and
   structural members, end caps and gussets now describe their cut list items (e.g. 'SQUARE TUBE 40 X 40 X 3',
   'END CAP 3 THK').
@@ -175,6 +179,9 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- `dimensions` listed a sketch's dimensions again (twice) under the feature built on it; each is listed once.
+- `create_drawing` left a part's DimXpert scheme (MBD dimensions and tolerances) off the drawing; the model's
+  annotation views are now imported with the other model items.
 - When a sketch failed or came out empty, the next extrude, revolve or other sketch feature silently reused the
   previous sketch that another feature had already consumed (cutting the part wrongly); the latest sketch is now
   refused when it is already in use, unless it is named on purpose.
