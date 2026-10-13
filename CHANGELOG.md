@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `equations(set={name: expression})` changes an equation or global variable by name (or adds it; an empty
+  expression deletes it), and equations that name a variable that no longer exists are flagged (they evaluate to 0).
 - `list_materials` search understands everyday names: 'carbon fibre' finds the CFRP laminates, 'kevlar' aramid,
   'fibreglass' the glass laminates, 'titanium' the Ti- alloys.
 - `drawing_table(kind='general', dimensions=..., configurations=[...])` tabulates only the chosen configurations
@@ -179,6 +181,13 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- STL and 3MF imports came in as graphics bodies (no mass, measurement or mates); they are now solids by default
+  (`import_file(mesh_as=...)` for surface or graphics), and Parasolid imports, which opened without a window and
+  left no active document, are shown and activated.
+- Exporting an assembly to STL failed ('failed: 0'): SolidWorks wrote one file per component elsewhere. The
+  assembly now goes out as one STL or 3MF file.
+- BOM balloons could land on a view or a dimension; after a BOM with balloons they are moved into clear space,
+  and dimensions count with their extension lines and arrows when other annotations are placed around them.
 - `edge_flange` on edges that meet at corners (a box or tray in one call) made overlapping flanges: a faulty
   body with an 'unknown' warning, and corners that could not be closed. Such edges are now built as groups
   with no shared corner, one after another, so SolidWorks trims them; `closed_corner` then works. Edge flanges,

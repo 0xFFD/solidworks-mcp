@@ -2019,12 +2019,16 @@ def test_bom_shows_part_numbers(tmp_path: Path):
         await c.call("insert_component", path="plate_a.sldprt", position=[0, 0, 0], fix=True)
         await c.call("insert_component", path="lug_b.sldprt", position=[0, 5, 0])
         await c.call("save_document", path="pn_asm.sldasm")
+        stl = await c.call("export", path="pn_asm.stl")  # the whole assembly in one file (for printing a mock-up)
+        assert Path(stl["file"]).exists() and stl["bytes"] > 1000
         try:
             d = await c.call("create_drawing", sheet="A3", isometric=False)
             bom = await c.call("drawing_table", kind="bom", view=d["views"][0]["name"], balloons=False)
             assert bom["part_number_from"] == "PartNo"
             assert sorted(row[1] for row in bom["rows"][1:]) == ["LUG-200", "PLT-100"]
             assert bom["rows"][0][1].upper() == "PART NUMBER"
+            ballooned = await c.call("drawing_table", kind="bom", view=d["views"][1]["name"], position=[300, 200])
+            assert ballooned["balloons"] == 2 and ballooned["annotations"]["clear"] is True  # balloons kept off views and dimensions
         finally:
             await c.call("close_document")
             await c.call("close_document", name="pn_asm.SLDASM")
@@ -2148,6 +2152,54 @@ def test_box_flanges_in_one_call(tmp_path: Path):
             await c.call("closed_corner", faces=["face@{},{},{}".format(*f["point"]) for f in ends])
             assert (await c.call("check_geometry"))["ok"] is True
             assert (await c.call("flat_pattern"))["bends"] == 4
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
+def test_import_round_trip_formats(tmp_path: Path):
+    """A part exported to each neutral format imports back as one solid of the same volume (STL and 3MF as solids)."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-20, -10], "corner2": [20, 10]}])
+        await c.call("finish_sketch")
+        v = (await c.call("extrude", depth=10))["volume_mm3"]
+        for ext in ("step", "igs", "x_t", "x_b", "sat", "stl", "3mf"):
+            await c.call("export", path=f"rt.{ext}")
+        await c.call("close_document")
+        for ext in ("step", "igs", "x_t", "x_b", "sat", "stl", "3mf"):
+            imp = await c.call("import_file", path=f"rt.{ext}")
+            try:
+                assert imp["solid_bodies"] == 1, ext
+                # meshes are faceted, so their volume is close rather than exact (a box meshes exactly)
+                assert (await c.call("mass_properties"))["volume_mm3"] == pytest.approx(v, rel=1e-3), ext
+            finally:
+                await c.call("close_document")
+
+    run(tmp_path, body)
+
+
+def test_equations_set_by_name(tmp_path: Path):
+    """Global variables drive a plate; changing one by name drives the model, and a deleted variable is flagged."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [0, 0], "corner2": [100, 40]}])
+            await c.call("modify_sketch", operations=[{"op": "dimension", "items": ["seg@50,0"], "value": 100}, {"op": "dimension", "items": ["seg@100,20"], "value": 40}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=8)
+            await c.call("equations", set={"Length": "150mm", "Width": '"Length" / 3', "D1@Sketch1": '"Length"', "D2@Sketch1": '"Width"',
+                                           "D1@Boss-Extrude1": '"Length" * 0.05'})
+            out = await c.call("equations", set={"Length": "200mm"})  # replaced, not added
+            assert sum(e["equation"].startswith('"Length"') for e in out["equations"]) == 1 and "warning" not in out
+            assert (await c.call("bounding_box"))["size"] == pytest.approx([200, 10, 200 / 3], abs=1e-3)
+            gone = await c.call("equations", set={"Width": ""})
+            assert gone["unresolved"] == ['"D2@Sketch1" = "Width"']
         finally:
             await c.call("close_document")
 

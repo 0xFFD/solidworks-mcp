@@ -212,16 +212,30 @@ IMPORTS = (".step", ".stp", ".igs", ".iges", ".x_t", ".x_b", ".sat", ".stl", ".3
 def import_file(
     path: Annotated[str, Field(description="STEP, IGES, Parasolid (.x_t/.x_b), ACIS (.sat), STL or 3MF file, e.g. a supplier's motor, connector or fastener model.")],
     save_as: Annotated[str | None, Field(description="Save the imported model as this .sldprt/.sldasm (needed before inserting it into an assembly).")] = None,
+    mesh_as: Annotated[Literal["solid", "surface", "graphics"], Field(description=(
+        "STL and 3MF: make the mesh a solid body (mass, measurement and mates work), a surface body, or a graphics-only body."))] = "solid",
 ) -> dict:
     """Import a neutral CAD file as a new SolidWorks part or assembly (bought-in parts, customer data).
     Run check_geometry on the result before using it."""
     a = app()
     p = a.path(path, must_exist=True, suffixes=IMPORTS)
-    res = SW.app.LoadFile4(str(p), "r", None, 0)
+    C = SW.C
+    mesh = p.suffix.lower() in (".stl", ".3mf")
+    if mesh:  # SolidWorks imports meshes as graphics bodies unless told otherwise
+        was = SW.app.GetUserPreferenceIntegerValue(C.swImportStlVrmlModelType)
+        SW.app.SetUserPreferenceIntegerValue(C.swImportStlVrmlModelType, getattr(C, f"swImportStlVrmlModelType_{mesh_as.capitalize()}"))
+    try:
+        res = SW.app.LoadFile4(str(p), "r", None, 0)
+    finally:
+        if mesh:
+            SW.app.SetUserPreferenceIntegerValue(C.swImportStlVrmlModelType, was)
     doc, err = (res if isinstance(res, tuple) else (res, 0))
     if doc is None:
         raise SwError(f"SolidWorks could not import {p.name} (error code {err}).")
     doc = SW.cast(doc, "IModelDoc2")
+    if not doc.Visible:  # Parasolid imports open without a window, so later tools would find no active document
+        doc.Visible = True
+    SW.app.ActivateDoc3(doc.GetTitle(), False, 0, 0)
     out = doc_summary(doc)
     if doc_kind(doc) == "part":
         out["solid_bodies"] = len(SW.part(doc).GetBodies2(0, True) or [])
@@ -303,9 +317,17 @@ def export(
         if sfx == ".pdf" and kind == "drawing":
             data = SW.cast(sw.GetExportFileData(C.swExportPdfData), "IExportPdfData")
             data.SetSheets(C.swExportData_ExportAllSheets if all_sheets else C.swExportData_ExportCurrentSheet, None)
-        ok, err, warn = ext.SaveAs3(str(p), 0, C.swSaveAsOptions_Silent | C.swSaveAsOptions_Copy, data, None, 0, 0)
+        one_file = sfx in (".stl", ".3mf") and kind == "assembly"
+        if one_file:  # an assembly would otherwise go out as one file per component, none of them at this path
+            was = sw.GetUserPreferenceToggle(C.swSTLComponentsIntoOneFile)
+            sw.SetUserPreferenceToggle(C.swSTLComponentsIntoOneFile, True)
+        try:
+            ok, err, warn = ext.SaveAs3(str(p), 0, C.swSaveAsOptions_Silent | C.swSaveAsOptions_Copy, data, None, 0, 0)
+        finally:
+            if one_file:
+                sw.SetUserPreferenceToggle(C.swSTLComponentsIntoOneFile, was)
         if not ok or not p.exists():
-            raise SwError(f"Export to {p.name} failed: {_save_errors(err)}")
+            raise SwError(f"Export to {p.name} failed: {_save_errors(err) or 'SolidWorks wrote no file'}.")
     out = {"file": str(p), "bytes": p.stat().st_size, **out}
     if mark:
         out["marking"] = mark
@@ -584,13 +606,36 @@ def set_material(
 def equations(
     add: Annotated[list[str] | None, Field(description="Equations or global variables to add, in SolidWorks syntax, e.g. '\"WallThk\" = 2.5mm' or '\"D1@Boss-Extrude1\" = \"WallThk\" * 4'.")] = None,
     delete: Annotated[list[int] | None, Field(description="Indices (from the listing) of equations to delete.")] = None,
+    set: Annotated[dict[str, str] | None, Field(description=(
+        "Set equations by name: {'Length': '150mm', 'D1@Sketch1': '\"Length\"', 'Width': '\"Length\" / 3'}; an existing "
+        "equation for the name is replaced, otherwise it is added; an empty expression deletes it. Quotes round the "
+        "name are optional."))] = None,
 ) -> dict:
-    """List, add or delete equations and global variables, then rebuild."""
+    """List, add, change or delete equations and global variables, then rebuild."""
     doc = SW.active()
     mgr = SW.cast(doc.GetEquationMgr(), "IEquationMgr")
     for i in sorted(delete or [], reverse=True):
         mgr.Delete(i)
     errors = []
+
+    def lhs(i: int) -> str:
+        return mgr.Equation(i).split("=", 1)[0].strip().strip('"').lower()
+
+    for name, expr in (set or {}).items():
+        key = name.strip().strip('"')
+        at = next((i for i in range(mgr.GetCount()) if lhs(i) == key.lower()), None)
+        if not str(expr).strip():
+            if at is not None:
+                mgr.Delete(at)
+            continue
+        text = f'"{key}" = {expr}'
+        if at is None:
+            if mgr.Add2(-1, text, True) < 0:
+                errors.append(text)
+        else:
+            mgr.SetEquation(at, text)
+            if mgr.Equation(at).replace(" ", "") != text.replace(" ", ""):
+                errors.append(text)
     for eq in add or []:
         # Add2 appends for all configurations; Add3 rejects a null configuration list through COM.
         if mgr.Add2(-1, eq, True) < 0:
@@ -600,6 +645,15 @@ def equations(
     for i in range(mgr.GetCount()):
         rows.append({"i": i, "equation": mgr.Equation(i), "value": round(mgr.Value(i), 6), "global": bool(mgr.GlobalVariable(i))})
     out = {"equations": rows}
+    # an equation that names a variable which no longer exists evaluates to 0 without complaint
+    import re
+
+    known = {r["equation"].split("=", 1)[0].strip().strip('"').lower() for r in rows if r["global"]}
+    dangling = [r["equation"] for r in rows
+                if any("@" not in n and n.lower() not in known for n in re.findall(r'"([^"]+)"', r["equation"].split("=", 1)[1]))]
+    if dangling:
+        out["unresolved"] = dangling
+        out["warning"] = "These equations name a global variable that does not exist (they evaluate to 0); set the variable or fix them."
     if errors:
         out["rejected"] = errors
         out["hint"] = "Names go in double quotes and lengths carry units, e.g. '\"Rib\" = 3mm'."

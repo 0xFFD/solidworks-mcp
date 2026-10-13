@@ -1358,9 +1358,10 @@ def _place_table(drw: Any, ta: Any, kind: str) -> tuple[float, float]:
     return x, y
 
 
-def _annotation_box(a: Any) -> tuple[float, float, float, float] | None:
+def _annotation_box(a: Any, whole: bool = False) -> tuple[float, float, float, float] | None:
     """Sheet box (metres) of a datum symbol or feature control frame: its texts and the frame lines around them,
-    leaving out the leader or stem that runs to the feature."""
+    leaving out the leader or stem that runs to the feature. whole=True takes every line as well (a dimension's
+    extension and dimension lines and arrows), for an annotation that others must keep clear of."""
     dd = SW.cast(a.GetDisplayData(), "IDisplayData")
     if dd is None or not dd.GetTextCount():
         return None
@@ -1379,7 +1380,7 @@ def _annotation_box(a: Any) -> tuple[float, float, float, float] | None:
     for i in range(dd.GetLineCount()):
         ln = list(dd.GetLineAtIndex3(i))
         for x, y in ((ln[4], ln[5]), (ln[7], ln[8])):
-            if tx0 - band <= x <= tx1 + band and ty0 - band <= y <= ty1 + band:
+            if whole or (tx0 - band <= x <= tx1 + band and ty0 - band <= y <= ty1 + band):
                 xs.append(x)
                 ys.append(y)
     return min(xs), min(ys), max(xs), max(ys)
@@ -1424,7 +1425,8 @@ def _tidy_annotations(doc: Any, drw: Any) -> dict:
     sv = SW.cast(drw.GetFirstView(), "IView")
     taken += [b for t in SW.cast_all(sv.GetTableAnnotations() or [], "ITableAnnotation") if (b := _table_box(t)) is not None]
     boxes = [(a, _annotation_box(a)) for _, a in keep.values()]
-    # diameter and radius dimensions are placed like the frames; other dimensions and notes stay where they are
+    # diameter and radius dimensions and BOM balloons are placed like the frames; other dimensions and notes stay
+    # where they are
     # (arrange stacks the linear ones) unless they fall outside the drawing area
     C = SW.C
     v = sv.GetNextView()
@@ -1437,10 +1439,11 @@ def _tidy_annotations(doc: Any, drw: Any) -> dict:
             if b is None:
                 continue
             radial = a.GetType() == C.swDisplayDimension and                 SW.cast(a.GetSpecificAnnotation(), "IDisplayDimension").GetType() in (C.swDiameterDimension, C.swRadialDimension)
-            if radial or b[0] < area[0] or b[1] < area[1] or b[2] > area[2] or b[3] > area[3]:
+            balloon = a.GetType() == C.swNote and SW.cast(a.GetSpecificAnnotation(), "INote").GetBalloonStyle() != C.swBS_None
+            if radial or balloon or b[0] < area[0] or b[1] < area[1] or b[2] > area[2] or b[3] > area[3]:
                 boxes.append((a, b))
             else:
-                taken.append(b)
+                taken.append(_annotation_box(a, whole=True) or b)
         v = v.GetNextView()
     moved = set()
     current = {id(a): b for a, b in boxes}
@@ -1684,6 +1687,8 @@ def drawing_table(
     doc.ForceRebuild3(True)
     out["rows"] = _table_rows(ta)
     out.update(_table_place_result(drw, ta, kind, position))
+    if kind == "bom" and out.get("balloons"):  # auto-balloons land where SolidWorks likes: move any on a view or a dimension
+        out["annotations"] = _tidy_annotations(doc, drw)
     return out
 
 
