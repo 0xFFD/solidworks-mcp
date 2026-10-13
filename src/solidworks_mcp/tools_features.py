@@ -1552,15 +1552,74 @@ def _with_split_halves(doc: Any, faces: list[Any]) -> list[Any]:
     return out
 
 
+def _hole_cavity(doc: Any, faces: list[Any]) -> list[Any]:
+    """Grow a selection that holds a hole's bore into the whole hole: coaxial cylinders (counterbores), cones
+    (countersinks, drill points) and planar faces bounded only by circles (counterbore floors, blind hole bottoms)
+    that touch it, repeated until nothing more joins. Other selections are returned unchanged."""
+    def axis_of(f: Any) -> tuple[list[float], list[float]] | None:
+        s = SW.cast(f.GetSurface(), "ISurface")
+        if s.IsCylinder():
+            p = list(s.CylinderParams)
+            return p[0:3], p[3:6]
+        if s.IsCone():
+            p = list(s.ConeParams)
+            return p[0:3], p[3:6]
+        return None
+
+    def coaxial(a: tuple, b: tuple) -> bool:
+        (o1, d1), (o2, d2) = a, b
+        if abs(abs(sum(d1[i] * d2[i] for i in range(3))) - 1) > 1e-7:
+            return False
+        v = [o2[i] - o1[i] for i in range(3)]
+        t = sum(v[i] * d1[i] for i in range(3))
+        return math.dist(o2, [o1[i] + d1[i] * t for i in range(3)]) < 1e-6
+
+    def hole_wall(f: Any) -> bool:  # a concave cylinder or cone on the bore's axis
+        ax = axis_of(f)
+        return ax is not None and bool(f.FaceInSurfaceSense()) and any(coaxial(b, ax) for b in bores)
+
+    def floor(f: Any, chosen: list[Any]) -> bool:
+        """A planar face ringed by circles whose every neighbour is a hole wall or already chosen (a counterbore
+        floor or a blind hole's bottom; a boss top has its convex outside wall as a neighbour and stays)."""
+        edges = SW.cast_all(f.GetEdges() or [], "IEdge")
+        if not edges or not all(SW.cast(e.GetCurve(), "ICurve").IsCircle() for e in edges):
+            return False
+        for e in edges:
+            for n in SW.cast_all(e.GetTwoAdjacentFaces2() or [], "IFace2"):
+                if SW.app.IsSame(n, f) != 1 and not any(SW.app.IsSame(n, x) == 1 for x in chosen) and not hole_wall(n):
+                    return False
+        return True
+
+    out = list(faces)
+    bores = [a for f in out if (a := axis_of(f)) is not None and SW.cast(f.GetSurface(), "ISurface").IsCylinder() and f.FaceInSurfaceSense()]
+    if not bores:
+        return out
+    grown = True
+    while grown:
+        grown = False
+        for f in list(out):
+            for e in SW.cast_all(f.GetEdges() or [], "IEdge"):
+                for n in SW.cast_all(e.GetTwoAdjacentFaces2() or [], "IFace2"):
+                    if any(SW.app.IsSame(n, x) == 1 for x in out):
+                        continue
+                    surf = SW.cast(n.GetSurface(), "ISurface")
+                    if hole_wall(n) or (surf.IsPlane() and floor(n, out)):
+                        out.append(n)
+                        grown = True
+    return out
+
+
 @tool(WRITES)
 def delete_faces(
-    faces: Annotated[list[str], Field(min_length=1, description="Faces to remove ('face@x,y,z'); the other halves of a split hole are added automatically.")],
+    faces: Annotated[list[str], Field(min_length=1, description=(
+        "Faces to remove ('face@x,y,z'). For a hole one bore face is enough: the rest of the hole (other halves of a split "
+        "cylinder, counterbore, countersink, floor) is added automatically."))],
     patch: Annotated[bool, Field(description="Heal the gap by extending the neighbouring faces (removes holes, pockets, fillets and bosses); false leaves an open surface.")] = True,
 ) -> dict:
     """Direct editing: delete faces and heal the body, to remove holes, pockets, fillets or logos from any body,
     including imported STEP and IGES parts that have no feature history (defeaturing supplier models)."""
     doc = SW.active("part")
-    picked = _with_split_halves(doc, [g.resolve(doc, f).obj for f in faces])
+    picked = _with_split_halves(doc, _hole_cavity(doc, _with_split_halves(doc, [g.resolve(doc, f).obj for f in faces])))
     before_faces, before_vol = len(g.faces(doc)), _volume(doc)
     doc.ClearSelection2(True)
     for f in picked:

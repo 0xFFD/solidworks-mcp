@@ -743,6 +743,45 @@ def motion_study(
             last = now
         return float(last)
 
+    # Basic Motion cannot solve an assembly with limit mates: nothing moves at all. They are switched off for the
+    # study and reported with their ranges, so the travel can be checked against them.
+    limits = []
+    for f in g.iter_features(doc):
+        if f.GetTypeName2() == "MateGroup":
+            sub = SW.cast(f.GetFirstSubFeature(), "IFeature")
+            while sub is not None:
+                if "Limit" in sub.GetTypeName2() and not sub.IsSuppressed():
+                    limits.append(sub)
+                sub = SW.cast(sub.GetNextSubFeature(), "IFeature")
+    limit_info = []
+    for f in limits:
+        mate = SW.try_cast(f.GetSpecificFeature2(), "IMate2")
+        angular = "Angle" in f.GetTypeName2()
+        conv = math.degrees if angular else to_mm
+        row = {"mate": f.Name, "unit": "deg" if angular else "mm"}
+        if mate is not None:
+            row.update(minimum=round(conv(mate.MinimumVariation), 4), maximum=round(conv(mate.MaximumVariation), 4))
+            names = []
+            for k in range(mate.GetMateEntityCount()):
+                comp = SW.try_cast(SW.cast(mate.MateEntity(k), "IMateEntity2").ReferenceComponent, "IComponent2")
+                if comp is not None and "/" not in comp.Name2:
+                    names.append(comp.Name2)
+            row["_components"] = names
+        limit_info.append(row)
+        f.SetSuppression2(C.swSuppressFeature, C.swThisConfiguration, None)
+    if limits:
+        doc.EditRebuild3()
+    try:
+        return _run_study(doc, mgr, build, solve, comps, start, duration, times, limit_info)
+    finally:
+        for f in limits:
+            f.SetSuppression2(C.swUnSuppressFeature, C.swThisConfiguration, None)
+        if limits:
+            doc.EditRebuild3()
+
+
+def _run_study(doc: Any, mgr: Any, build: Any, solve: Any, comps: list[Any], start: dict, duration: float,
+               times: list[float] | None, limit_info: list[dict]) -> dict:
     rows = []
     st = build(duration)
     # each time is the end state of a solve to that time: Basic Motion stores coarse frames, and scrubbing to a
@@ -769,6 +808,17 @@ def motion_study(
     doc.GraphicsRedraw2()
     back = [c.Name2 for c in comps if max(abs(a - b) for a, b in zip(_pose(c)[1], start[c.Name2][1])) > 1e-7]
     out = {"study": st.Name, "duration_s": duration, "results": rows}
+    if limit_info:
+        for lim in limit_info:  # an angle limit is passed when a component it ties turns further than the range allows
+            names = lim.pop("_components", [])
+            if lim["unit"] == "deg" and "maximum" in lim:
+                reach = max(abs(lim["minimum"]), abs(lim["maximum"]))
+                over = [r["time_s"] for r in rows for n in names if r["components"].get(n, {}).get("turned_deg", 0) > reach + 1e-6]
+                if over:
+                    lim["exceeded_at_s"] = min(over)
+        out["limit_mates_off"] = limit_info
+        out["note"] = ("Basic Motion cannot solve with limit mates, so they were off during the study (and are back on now). "
+                       "exceeded_at_s marks an angle limit passed, counting from the start position as the mate's nominal angle.")
     if back:
         out["warning"] = f"{', '.join(back)} did not return to the start; check list_components before editing further."
     return out

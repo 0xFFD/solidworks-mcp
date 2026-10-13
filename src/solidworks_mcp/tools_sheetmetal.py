@@ -104,6 +104,23 @@ def sheet_metal_base(
     return out
 
 
+def _body_faults(doc: Any) -> int:
+    """Faults SolidWorks' body check finds in the part's solid bodies (overlapping flanges, a hem running into a
+    neighbouring flange)."""
+    n = 0
+    for b in g.bodies(doc):
+        fe = SW.cast(b.Check3, "IFaultEntity")
+        n += fe.Count if fe is not None else 0
+    return n
+
+
+def _warn_faults(doc: Any, out: dict, what: str) -> dict:
+    if faults := _body_faults(doc):
+        out["warning"] = (f"The body check finds {faults} faults after the {what} (it probably runs into a neighbouring flange); "
+                          "shorten it, or undo and build it differently.")
+    return out
+
+
 def _template_sheet_metal(doc: Any) -> Any:
     """The part's template sheet metal feature: its definition holds the defaults every bend falls back on
     (the per-body Sheet-Metal feature ignores K-factor changes)."""
@@ -204,21 +221,10 @@ def _flange_profile(doc: Any, ref: str, length: float) -> tuple[Any, Any]:
     return plane, g.feature_by_name(doc, skname)
 
 
-@tool(WRITES)
-def edge_flange(
-    edges: Annotated[list[str], Field(description="Straight edges of the sheet ('edge@x,y,z'). The flange rises on the side of the sheet face the edge belongs to (pick the top or bottom edge of the sheet).")],
-    length: Annotated[float, Field(gt=0, description="Flange length in mm, measured from the face the edge lies on (inner virtual sharp).")],
-    angle: Annotated[float, Field(gt=0, lt=180, description="Bend angle in degrees (90 for a right-angle flange).")] = 90.0,
-    position: Annotated[Literal["material_inside", "material_outside", "bend_outside"], Field(description="Where the flange sits relative to the edge: material_inside keeps the outer size of the blank.")] = "material_inside",
-    bend_radius: Annotated[float | None, Field(description="Inside bend radius in mm; default is the part's sheet metal radius.")] = None,
-    k_factor: Annotated[float | None, Field(gt=0, lt=1, description="K-factor for these bends (0.3-0.5; aluminium alloys often 0.4-0.45); default is the part's.")] = None,
-) -> dict:
-    """Fold up flanges along edges of a sheet metal part (box sides, mounting tabs, stiffening lips)."""
-    doc = SW.active("part")
+def _edge_flange_feature(doc: Any, edges: list[str], length: float, angle: float, position: str, bend_radius: float | None,
+                         k_factor: float | None) -> Any:
+    """One edge flange feature on edges that share no corner; None when SolidWorks refuses it."""
     C = SW.C
-    _sheet_metal_feature(doc)
-    if not edges or any(g.resolve(doc, e).kind != "edge" for e in edges):
-        raise SwError("Give one or more straight edges ('edge@x,y,z').")
     planes, sketches = [], []
     f = None
     try:
@@ -247,11 +253,62 @@ def edge_flange(
                 doc.Extension.DeleteSelection2(C.swDelete_Absorbed)
             doc.ClearSelection2(True)
         else:
-            for p in planes:
-                p.Select2(True, 0)
+            for p_ in planes:
+                p_.Select2(True, 0)
             doc.BlankRefGeom()  # hide the profile planes
+    return f
+
+
+@tool(WRITES)
+def edge_flange(
+    edges: Annotated[list[str], Field(description="Straight edges of the sheet ('edge@x,y,z'). The flange rises on the side of the sheet face the edge belongs to (pick the top or bottom edge of the sheet).")],
+    length: Annotated[float, Field(gt=0, description="Flange length in mm, measured from the face the edge lies on (inner virtual sharp).")],
+    angle: Annotated[float, Field(gt=0, lt=180, description="Bend angle in degrees (90 for a right-angle flange).")] = 90.0,
+    position: Annotated[Literal["material_inside", "material_outside", "bend_outside"], Field(description="Where the flange sits relative to the edge: material_inside keeps the outer size of the blank.")] = "material_inside",
+    bend_radius: Annotated[float | None, Field(description="Inside bend radius in mm; default is the part's sheet metal radius.")] = None,
+    k_factor: Annotated[float | None, Field(gt=0, lt=1, description="K-factor for these bends (0.3-0.5; aluminium alloys often 0.4-0.45); default is the part's.")] = None,
+) -> dict:
+    """Fold up flanges along edges of a sheet metal part (box sides, mounting tabs, stiffening lips). Flanges that
+    meet at a corner are built one after another so SolidWorks trims them there; close the corners with closed_corner."""
+    doc = SW.active("part")
+    _sheet_metal_feature(doc)
+    if not edges or any(g.resolve(doc, e).kind != "edge" for e in edges):
+        raise SwError("Give one or more straight edges ('edge@x,y,z').")
+    # flanges that meet at a corner, built in one feature, overlap there (each wall runs the full edge). Built as
+    # separate features one after another, SolidWorks trims each later flange against the earlier ones, and the
+    # corner can be closed with closed_corner. So the edges go into groups with no shared corner, one feature each.
+    ends = []
+    for e in edges:
+        prm = SW.cast(SW.cast(g.resolve(doc, e).obj, "IEdge").GetCurveParams3(), "ICurveParamData")
+        ends.append((list(prm.StartPoint)[:3], list(prm.EndPoint)[:3]))
+
+    def touch(i: int, j: int) -> bool:
+        return any(math.dist(p_, q) < 1e-6 for p_ in ends[i] for q in ends[j])
+
+    groups: list[list[int]] = []
+    for i in range(len(edges)):
+        for grp in groups:
+            if not any(touch(i, j) for j in grp):
+                grp.append(i)
+                break
+        else:
+            groups.append([i])
+    feats = []
+    for grp in groups:
+        f = _edge_flange_feature(doc, [edges[i] for i in grp], length, angle, position, bend_radius, k_factor)
+        if f is None:
+            for done in reversed(feats):  # all or nothing: take back the groups already built
+                doc.ClearSelection2(True)
+                done.Select2(False, 0)
+                doc.Extension.DeleteSelection2(SW.C.swDelete_Absorbed)
+            doc.ClearSelection2(True)
+            break
+        feats.append(f)
     out = result(doc, f, "edge flange", "Use straight edges on the sheet's top or bottom face, and a length larger than the bend radius.")
+    _warn_faults(doc, out, "edge flange")
     out["flanges"] = len(edges)
+    if len(feats) > 1:
+        out["features"] = [x.Name for x in feats]  # flanges meeting at corners are built one group after another
     if k_factor is not None:
         out["k_factor"] = k_factor
     return out
@@ -335,6 +392,7 @@ def hem(
         doc.ClearSelection2(True)
         raise SwError("SolidWorks could not add the hem; use straight edges on the sheet's outline.")
     out = result(doc, f, "hem")
+    _warn_faults(doc, out, "hem")
     if out["feature"] == before:
         raise SwError("SolidWorks did not add the hem.")
     out["edges"] = len(edges)
@@ -543,6 +601,7 @@ def miter_flange(
             plane.Select2(False, 0)
             doc.BlankRefGeom()
     out = result(doc, f, "miter flange", "The edges must be connected straight edges on one face of the sheet, listed in order.")
+    _warn_faults(doc, out, "miter flange")
     out["edges"] = len(edges)
     return out
 

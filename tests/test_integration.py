@@ -2052,3 +2052,103 @@ def test_consumed_sketch_not_reused(tmp_path: Path):
             await c.call("close_document")
 
     run(tmp_path, body)
+
+
+def test_delete_whole_hole_from_one_face(tmp_path: Path):
+    """On an imported part one bore face removes a whole counterbored hole; a boss's top stays when its hole goes."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-50, -30], "corner2": [50, 30]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=15)
+        await c.call("hole", size="M6", kind="counterbore", positions=[[-35, 15, -15], [35, 15, 15]])
+        await c.call("export", path="cb_block.step", step_ap="214")
+        await c.call("close_document")
+        await c.call("import_file", path="cb_block.step")
+        try:
+            small = [f for f in (await c.call("list_faces", type="cylinder"))["faces"]
+                     if f.get("hole") and f["radius"] == pytest.approx(3.3) and f["axis_point"][0] == pytest.approx(35)]
+            out = await c.call("delete_faces", faces=[f"face:{small[0]['i']}"])
+            cb_depth = 6.4  # ISO counterbore for M6: 11 diameter, 6.4 deep, then the 6.6 bore
+            assert out["volume_change_mm3"] == pytest.approx(math.pi * (5.5**2 * cb_depth + 3.3**2 * (15 - cb_depth)), rel=1e-4)
+            left = [f for f in (await c.call("list_faces", type="cylinder"))["faces"] if f.get("hole")]
+            assert all(f["axis_point"][0] == pytest.approx(-35) for f in left)  # only the other hole remains
+        finally:
+            await c.call("close_document")
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-30, -30], "corner2": [30, 30]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=5)
+            await c.call("start_sketch", on="face@0,5,0")
+            await c.call("sketch", entities=[{"type": "circle", "center": [0, 0], "diameter": 20}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=8)
+            await c.call("hole", size="Ø6.6", fastener="drill", positions=[[0, 13, 0]])
+            bore = next(f for f in (await c.call("list_faces", type="cylinder"))["faces"] if f.get("hole"))
+            out = await c.call("delete_faces", faces=[f"face:{bore['i']}"])
+            assert out["volume_change_mm3"] == pytest.approx(math.pi * 3.3**2 * 13, rel=1e-4)  # the boss is untouched
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
+def test_motion_study_with_limit_mate(tmp_path: Path):
+    """A hinged surface driven past a +/-20 deg limit mate: the study still moves it and flags the limit, which is back on afterwards."""
+
+    async def body(c: Session):
+        for name, rect in (("spar", ([-40, -10], [8, 10])), ("flap", ([-8, -5], [60, 5]))):
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": rect[0], "corner2": rect[1]}, {"type": "circle", "center": [0, 0], "diameter": 6}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=20)
+            await c.call("save_document", path=f"{name}.sldprt")
+            await c.call("close_document")
+        await c.call("new_document", kind="assembly")
+        try:
+            await c.call("insert_component", path="spar.sldprt", position=[0, 0, 0], fix=True)
+            await c.call("insert_component", path="flap.sldprt", position=[0, 0, 25])
+            await c.call("add_mate", type="concentric", refs=["face@spar-1/3,0,10", "face@flap-1/3,0,35"])
+            await c.call("add_mate", type="coincident", refs=["face@spar-1/-20,0,20", "face@flap-1/30,0,25"])
+            await c.call("add_mate", type="limit_angle", refs=["face@flap-1/30,5,35", "face@spar-1/-20,10,10"], minimum=-20, maximum=20)
+            out = await c.call("motion_study", motors=[{"face": "face@flap-1/3,0,35", "kind": "rotary", "rpm": 10}], duration=1.0, times=[0.25, 0.5])
+            turned = [r["components"]["flap-1"]["turned_deg"] for r in out["results"]]
+            assert turned == pytest.approx([15, 30], abs=0.01)  # 60 deg/s
+            lim = out["limit_mates_off"][0]
+            assert (lim["minimum"], lim["maximum"]) == pytest.approx((-20, 20)) and lim["exceeded_at_s"] == 0.5
+            # the limit mate is on again: a second study finds it active and switches it off once more
+            again = await c.call("motion_study", motors=[{"face": "face@flap-1/3,0,35", "kind": "rotary", "rpm": 10}], duration=0.25)
+            assert [m["mate"] for m in again["limit_mates_off"]] == [lim["mate"]]
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
+def test_box_flanges_in_one_call(tmp_path: Path):
+    """Four flanges round a blank in one call come out clean (no overlap at the corners), and the corners can be closed."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-80, -50], "corner2": [80, 50]}])
+            await c.call("finish_sketch")
+            await c.call("sheet_metal_base", thickness=1.6, bend_radius=1.6)
+            out = await c.call("edge_flange", edges=["edge@0,0,-50", "edge@0,0,50", "edge@80,0,0", "edge@-80,0,0"], length=20)
+            assert out["flanges"] == 4 and len(out["features"]) == 2
+            assert (await c.call("check_geometry"))["ok"] is True
+            ends = [f for f in (await c.call("list_faces", type="plane", limit=80))["faces"]
+                    if f.get("area_mm2", 0) == pytest.approx(1.6 * 20, abs=8) and abs(f["point"][0]) == pytest.approx(80)]
+            await c.call("closed_corner", faces=["face@{},{},{}".format(*f["point"]) for f in ends])
+            assert (await c.call("check_geometry"))["ok"] is True
+            assert (await c.call("flat_pattern"))["bends"] == 4
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)

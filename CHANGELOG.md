@@ -179,6 +179,15 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- `edge_flange` on edges that meet at corners (a box or tray in one call) made overlapping flanges: a faulty
+  body with an 'unknown' warning, and corners that could not be closed. Such edges are now built as groups
+  with no shared corner, one after another, so SolidWorks trims them; `closed_corner` then works. Edge flanges,
+  miter flanges and hems warn when the body check finds faults afterwards.
+- `motion_study` reported no motion at all for an assembly with limit mates (Basic Motion cannot solve with
+  them); they are now off during the study and back on afterwards, reported with their ranges, and an angle
+  limit that the motion passes is flagged with the time.
+- `delete_faces` needed every face of a counterbored or countersunk hole and failed otherwise; one bore face now
+  removes the whole hole (counterbore, countersink, floor and split halves), while a boss around a hole stays.
 - `dimensions` listed a sketch's dimensions again (twice) under the feature built on it; each is listed once.
 - `create_drawing` left a part's DimXpert scheme (MBD dimensions and tolerances) off the drawing; the model's
   annotation views are now imported with the other model items.
