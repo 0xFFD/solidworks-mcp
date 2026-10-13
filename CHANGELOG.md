@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `dimxpert(action='set_tolerance')` changes the plus/minus tolerance of DimXpert size and location annotations
+  one by one, checked against what DimXpert then reports.
 - `create_forming_tool` makes a forming tool (.sldftp) from a modelled punch with its stopping face and optional
   faces to remove (pierced forms), for stiffening beads, joggled tabs and dimples the design library lacks.
 - `miter_flange(lip=...)` adds a return lip along the top of the flange, turned out (a Z section) or in over the part,

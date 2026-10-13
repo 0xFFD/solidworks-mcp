@@ -937,6 +937,8 @@ def test_dimxpert_schemes(tmp_path: Path):
             await c.call("extrude", cut=True, end="through_all")
             datums = ["face@40,0,-25", "face@40,5,0", "face@0,5,-25"]
             geo = (await c.call("dimxpert", datums=datums))["annotations"]
+            pos = next(a["name"] for a in geo if a["kind"] == "Position")
+            assert "geometric tolerance" in await c.fails("dimxpert", action="set_tolerance", tolerances={pos: {"plus": 0.1}})
             assert [a["label"] for a in geo if a["kind"] == "Datum"] == ["A", "B", "C"]
             kinds = {a["kind"] for a in geo}
             assert {"Flatness", "Perpendicularity", "Position", "Diameter"} <= kinds
@@ -947,6 +949,13 @@ def test_dimxpert_schemes(tmp_path: Path):
             assert "Position" not in {a["kind"] for a in pm}  # replaced, not added to
             assert sorted(a["nominal"] for a in pm if "Hole Pattern" in a["name"] and a["kind"] == "DistanceBetween") == pytest.approx([15, 15])
             assert (await c.call("dimxpert", action="list"))["annotations"] == pm
+            hole = next(a["name"] for a in pm if a["kind"] == "Diameter")
+            spaced = next(a["name"] for a in pm if "Hole Pattern" in a["name"] and a["kind"] == "DistanceBetween")
+            out = await c.call("dimxpert", action="set_tolerance", tolerances={hole: {"plus": 0.05, "minus": 0}, spaced: {"plus": 0.1}})
+            got = {a["name"]: a for a in out["annotations"]}
+            assert got[hole]["plus"] == pytest.approx(0.05) and got[hole]["minus"] == pytest.approx(0)
+            assert got[spaced]["plus"] == pytest.approx(0.1) and got[spaced]["minus"] == pytest.approx(-0.1)
+            assert "No DimXpert annotation" in await c.fails("dimxpert", action="set_tolerance", tolerances={"Nothing1": {"plus": 0.1}})
             assert (await c.call("dimxpert", action="clear"))["annotations"] == []
             assert "1 to 3 datum faces" in await c.fails("dimxpert")
         finally:

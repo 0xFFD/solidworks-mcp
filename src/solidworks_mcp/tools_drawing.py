@@ -279,19 +279,63 @@ def _dimxpert_annotations(doc: Any, part: Any) -> list[dict]:
     return out
 
 
+def _dimxpert_set_tolerances(doc: Any, tolerances: dict[str, dict[str, float]]) -> dict:
+    """Plus/minus tolerances on DimXpert size and location annotations, through the model dimension each one shows as."""
+    C = SW.C
+    if not tolerances:
+        raise SwError("Give tolerances={annotation name: {plus, minus}}; dimxpert(action='list') gives the names.")
+    part = _dimxpert_part(doc)
+    by_name = {SW.cast(a, "IDimXpertAnnotation").Name: SW.cast(a, "IDimXpertAnnotation") for a in part.GetAnnotations() or []}
+    for name, spec in tolerances.items():
+        a = by_name.get(name)
+        if a is None:
+            raise SwError(f"No DimXpert annotation '{name}'. Annotations: {sorted(by_name)}")
+        if SW.try_cast(a, "IDimXpertDimensionTolerance") is None:
+            raise SwError(f"{name} is a geometric tolerance; its value follows the DimXpert options (SolidWorks stores an "
+                          "edited frame value inconsistently with what the frame shows), so change it with add_geometric_tolerance.")
+        ann = SW.try_cast(a.GetDisplayEntity(), "IAnnotation")  # the annotation it shows as; its specific one is the dimension
+        disp = SW.try_cast(ann.GetSpecificAnnotation(), "IDisplayDimension") if ann is not None and ann.GetType() == C.swDisplayDimension else None
+        if disp is None:
+            raise SwError(f"{name} has no dimension in the model to carry its tolerance.")
+        dim = SW.cast(disp.GetDimension2(0), "IDimension")
+        plus, minus = float(spec.get("plus", 0)), abs(float(spec.get("minus", spec.get("plus", 0))))
+        if plus < 0 or (plus == 0 and minus == 0):
+            raise SwError(f"{name}: give plus (and minus) in mm.")
+        angular = dim.GetType() == C.swDimensionParamTypeDoubleAngular
+        conv = math.radians if angular else mm
+        tol = SW.cast(dim.Tolerance, "IDimensionTolerance")
+        tol.Type = C.swTolSYMMETRIC if abs(plus - minus) < 1e-12 else C.swTolBILAT
+        if not tol.SetValues(-conv(minus), conv(plus)):
+            raise SwError(f"SolidWorks rejected the tolerance on {name}.")
+    doc.EditRebuild3()
+    anns = _dimxpert_annotations(doc, _dimxpert_part(doc))
+    got = {r["name"]: r for r in anns}
+    for name, spec in tolerances.items():
+        r = got.get(name, {})
+        plus, minus = float(spec.get("plus", 0)), abs(float(spec.get("minus", spec.get("plus", 0))))
+        if abs(r.get("plus", math.nan) - plus) > 1e-4 or abs(abs(r.get("minus", math.nan)) - minus) > 1e-4:
+            raise SwError(f"{name} reads back as +{r.get('plus')}/{r.get('minus')}, not +{plus}/-{minus}.")
+    return {"changed": sorted(tolerances), "annotations": anns}
+
+
 @tool(WRITES)
 def dimxpert(
-    action: Annotated[Literal["auto", "list", "clear"], Field(description="auto: apply an automatic dimension scheme; list: report the scheme; clear: delete it.")] = "auto",
+    action: Annotated[Literal["auto", "list", "clear", "set_tolerance"], Field(description=(
+        "auto: apply an automatic dimension scheme; list: report the scheme; clear: delete it; set_tolerance: change the "
+        "plus/minus tolerance of size and location annotations by name."))] = "auto",
     datums: Annotated[list[str] | None, Field(description="auto: primary, secondary and tertiary datum faces ('face@x,y,z', planar or cylindrical); at least the primary.")] = None,
     tolerance: Annotated[Literal["geometric", "plus_minus"], Field(description="Geometric: datums with flatness, perpendicularity and position tolerances. plus_minus: size and location dimensions.")] = "geometric",
     part_type: Annotated[Literal["prismatic", "turned"], Field(description="Prismatic (machined block) or turned (lathe part).")] = "prismatic",
     pattern: Annotated[Literal["linear", "polar"], Field(description="How hole patterns are located.")] = "linear",
+    tolerances: Annotated[dict[str, dict[str, float]] | None, Field(description=(
+        "set_tolerance: {annotation name from list: {plus: mm, minus: mm}} (minus as a positive number; equal values "
+        "give a symmetric tolerance), e.g. {'Diameter1@Hole Pattern1(6.6)': {'plus': 0.05, 'minus': 0}}."))] = None,
 ) -> dict:
     """DimXpert model-based definition: recognises manufacturing features (planes, holes, patterns) and applies a
     complete datum, size and geometric tolerance scheme to the 3D model for MBD and inspection (ASME Y14.41 style).
     Faces turn green when fully toleranced. Replaces any existing DimXpert scheme. Tolerance values come from the
     DimXpert options of the document (block tolerances, default ASME inch), so review them against the drawing's
-    general tolerances."""
+    general tolerances, and adjust size and location tolerances one by one with action='set_tolerance'."""
     doc = SW.active("part")
     if action == "clear":
         _dimxpert_part(doc).DeleteAllTolerances()
@@ -299,6 +343,8 @@ def dimxpert(
     if action == "list":
         part = _dimxpert_part(doc)
         return {"features": part.GetFeatureCount(), "annotations": _dimxpert_annotations(doc, part)}
+    if action == "set_tolerance":
+        return _dimxpert_set_tolerances(doc, tolerances or {})
     if not datums or len(datums) > 3:
         raise SwError("An automatic scheme needs 1 to 3 datum faces, primary first.")
     refs = [g.resolve(doc, r) for r in datums]
