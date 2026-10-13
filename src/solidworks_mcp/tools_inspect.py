@@ -494,12 +494,14 @@ def screenshot(
             hide_was = None
     if zoom_to_fit:  # after hiding, so the fit frames only what the capture shows
         doc.ViewZoomtofit2()
+        if doc_kind(doc) == "drawing":  # the capture's aspect can differ from the window's: keep the whole sheet in frame, crop after
+            doc.ViewZoomout()
     doc.GraphicsRedraw2()
     shots = a.settings.workspace / "screenshots"
     shots.mkdir(parents=True, exist_ok=True)
     bmp = shots / f"_shot_{int(time.time() * 1000)}.bmp"
-    model = zoom_to_fit and doc_kind(doc) != "drawing"
-    k = 2 if model and max(width, height) <= 1200 else 1  # oversample so the crop to the model keeps detail
+    model = zoom_to_fit
+    k = 2 if model and max(width, height) <= 1200 else 1  # oversample so the crop to the model (or sheet) keeps detail
     try:
         captured = doc.SaveBMP(str(bmp), width * k, height * k)
     finally:
@@ -511,7 +513,7 @@ def screenshot(
     try:
         im = PILImage.open(bmp).convert("RGB")
         if model:
-            im = fit_crop(im, width, height)
+            im = fit_crop(im, width, height, margin=0.02 if doc_kind(doc) == "drawing" else 0.06)
         buf = io.BytesIO()
         im.save(buf, "PNG", optimize=True)
     finally:

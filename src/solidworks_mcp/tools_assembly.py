@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -553,14 +554,18 @@ def _boxes(doc) -> list[tuple[float, ...]]:
 
 @tool(WRITES)
 def subassembly(
-    action: Annotated[Literal["form", "dissolve"], Field(description=(
+    action: Annotated[Literal["form", "dissolve", "save_out"], Field(description=(
         "form: move components into a new sub-assembly (stored inside the assembly until saved out); "
-        "dissolve: move a sub-assembly's components up into its parent and remove it."))],
+        "dissolve: move a sub-assembly's components up into its parent and remove it; "
+        "save_out: save a virtual (in-assembly) sub-assembly or part to its own file, which the assembly then references."))],
     components: Annotated[list[str] | None, Field(description="form: the components to group, e.g. ['Bolt-1', 'Nut-1'].")] = None,
-    name: Annotated[str | None, Field(description="form: name of the new sub-assembly (e.g. 'Hinge-Kit'). dissolve: the sub-assembly to dissolve.")] = None,
+    name: Annotated[str | None, Field(description=(
+        "form: name of the new sub-assembly (e.g. 'Hinge-Kit'). dissolve, save_out: the sub-assembly (or virtual part).") )] = None,
+    path: Annotated[str | None, Field(description="save_out: file to save to (.sldasm, or .sldprt for a virtual part); default <name>.sldasm in the workspace.")] = None,
 ) -> dict:
     """Restructure an assembly's tree for the build and the indented BOM: group components into a new
-    sub-assembly (a kit, an installation) or dissolve one. Components keep their positions."""
+    sub-assembly (a kit, an installation), dissolve one, or save a virtual one out to its own file for release.
+    Components keep their positions."""
     from .tools_features import _dispatch_array
 
     doc = SW.active("assembly")
@@ -588,10 +593,28 @@ def subassembly(
         label = sub.Name2
     else:
         if not name:
-            raise SwError("Give the sub-assembly to dissolve (name=).")
+            raise SwError(f"Give the sub-assembly to {action.replace('_', ' ')} (name=).")
         # a virtual sub-assembly is named 'Name^Parent-1'; accept the plain name too
         sub = next((c for c in g.components(doc) if "/" not in c.Name2 and c.Name2.split("^")[0] == name), None) or g.find_component(doc, name)
         label = sub.Name2
+    if action == "save_out":
+        if not sub.IsVirtual:
+            raise SwError(f"{label} is already saved in its own file ({sub.GetPathName()}).")
+        suffix = ".sldprt" if sub.GetPathName().lower().endswith(".sldprt") else ".sldasm"
+        target = app().path(path or f"{label.split('^')[0]}{suffix}", suffixes=(suffix,))
+        if target.exists():
+            raise SwError(f"{target.name} already exists; give another path.")
+        if not sub.SaveVirtualComponent(str(target)) or not target.exists():
+            raise SwError(f"SolidWorks could not save {label} to {target}.")
+        doc.EditRebuild3()
+        saved = next((c for c in g.components(doc) if not c.IsVirtual and Path(c.GetPathName()).resolve() == target.resolve()), None)
+        if saved is None:
+            raise SwError(f"{target.name} was written but the assembly does not reference it.")
+        if _boxes(doc) != before:
+            raise SwError("Saving out moved components; undo it in SolidWorks.")
+        return {"action": action, "subassembly": saved.Name2, "file": str(target),
+                "components": [c.Name2 for c in g.components(doc)], "note": "Save the parent assembly to keep the new reference."}
+    if action == "dissolve":
         doc.ClearSelection2(True)
         sub.Select4(False, None, False)
         if not asm.DissolveSubAssembly():

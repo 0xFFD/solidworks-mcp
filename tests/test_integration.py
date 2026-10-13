@@ -1025,6 +1025,12 @@ def test_radial_explode(tmp_path: Path):
             assert any(line["file"].startswith("Nub-Kit") for line in (await c.call("bom"))["lines"])
             flat = await c.call("subassembly", action="dissolve", name="Nub-Kit")
             assert not any("/" in n for n in flat["components"]) and len(flat["components"]) == 4
+            # a kit saved out to its own file for release: the assembly then references that file
+            await c.call("subassembly", action="form", components=["nub-3", "nub-4"], name="Nub-Pair")
+            out = await c.call("subassembly", action="save_out", name="Nub-Pair", path="Nub-Pair.sldasm")
+            assert Path(out["file"]).exists() and out["subassembly"] == "Nub-Pair-1"
+            assert sum(n.startswith("Nub-Pair-1/") for n in out["components"]) == 2  # instance numbers change on dissolve
+            assert "already saved" in await c.fails("subassembly", action="save_out", name="Nub-Pair-1")
         finally:
             await c.call("close_document")
 
@@ -1471,3 +1477,120 @@ def test_marking_required_for_export(tmp_path: Path):
             await c.call("close_document")
 
     run(tmp_path, body, "--require-marking")
+
+
+def test_3d_sketch_dimensions(tmp_path: Path):
+    """A tube route in a 3D sketch fully defined by axis relations and driving dimensions, then driven."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="3d")
+            await c.call("sketch", entities=[{"type": "polyline", "points": [[0, 0, 0], [50, 0, 0], [50, 30, 0], [50, 30, 40]]}])
+            out = await c.call("modify_sketch", operations=[
+                {"op": "relation", "type": "coincident", "items": ["pt@0,0,0", "origin"]},
+                {"op": "relation", "type": "along_x", "items": ["seg@25,0,0"]},
+                {"op": "relation", "type": "along_y", "items": ["seg@50,15,0"]},
+                {"op": "relation", "type": "along_z", "items": ["seg@50,30,20"]},
+                {"op": "dimension", "items": ["seg@25,0,0"], "value": 80},
+                {"op": "dimension", "items": ["seg:1"], "value": 25},
+                {"op": "dimension", "items": ["seg:2"], "value": 60}])
+            assert out["status"] == "fully_defined"
+            segs = (await c.call("list_sketch"))["segments"]
+            assert [s["length"] for s in segs] == pytest.approx([80, 25, 60])
+            assert segs[2]["end"] == pytest.approx([80, 25, 60])
+            assert "aligned" in await c.fails("modify_sketch", operations=[{"op": "dimension", "items": ["seg:0"], "orientation": "vertical"}])
+            await c.call("finish_sketch")
+            await c.call("set_dimensions", values={"D1@3DSketch1": 100})
+            segs = (await c.call("list_sketch", sketch="3DSketch1"))["segments"]
+            assert segs[2]["end"] == pytest.approx([100, 25, 60])
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
+def test_edit_reference_planes(tmp_path: Path):
+    """An offset plane re-based on a datum face and flipped, and an angled plane re-angled; a boss on the plane follows."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-40, -25], "corner2": [40, 25]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=10)
+            await c.call("ref_plane", mode="offset", refs=["plane:Top"], distance=20)
+            await c.call("ref_plane", mode="angle", refs=["plane:Front", "edge@0,10,25"], angle=30)
+            await c.call("start_sketch", on="plane:Plane1")
+            await c.call("sketch", entities=[{"type": "circle", "center": [0, 0], "diameter": 10}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=5)
+            boss = math.pi * 25 * 5
+            out = await c.call("edit_feature", feature="Plane1", refs=["face@0,10,0"], distance=5)
+            assert out["plane"]["origin_mm"][1] == pytest.approx(15) and out["changed"] == ["refs", "distance"]
+            assert (await c.call("mass_properties"))["volume_mm3"] == pytest.approx(40000 + boss)
+            out = await c.call("edit_feature", feature="Plane1", reverse=True)  # into the block: the boss is swallowed
+            assert out["plane"]["origin_mm"][1] == pytest.approx(5)
+            assert (await c.call("mass_properties"))["volume_mm3"] == pytest.approx(40000)
+            out = await c.call("edit_feature", feature="Plane2", angle=45)
+            assert [abs(v) for v in out["plane"]["normal"]] == pytest.approx([0, math.sqrt(0.5), math.sqrt(0.5)])
+            assert "not an offset plane" in await c.fails("edit_feature", feature="Plane2", distance=4)
+            assert "1 reference" in await c.fails("edit_feature", feature="Plane1", refs=["plane:Top", "plane:Front"])
+            # an axis made from two planes moved onto a hole's cylinder
+            await c.call("hole", size="Ø6.6", fastener="drill", positions=[[20, 10, 0]])
+            await c.call("ref_axis", refs=["plane:Front", "plane:Right"])
+            out = await c.call("edit_feature", feature="Axis1", refs=["face@23.3,5,0"])
+            ax = out["axis"]
+            assert [ax["start_mm"][0], ax["start_mm"][2], ax["end_mm"][0], ax["end_mm"][2]] == pytest.approx([20, 0, 20, 0], abs=1e-6)
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
+def test_sheet_format_and_table_placement(tmp_path: Path):
+    """An ISO title block on the sheet, and tables without a position placed clear of views, each other and the title block."""
+
+    def clear(a, b):
+        return a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1]
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-80, -50], "corner2": [80, 50]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=30)
+        await c.call("save_document", path="plate.sldprt")
+        try:
+            d = await c.call("create_drawing", sheet="A3", sheet_format="iso", projection="first")
+            assert d["sheet_format"] == "a3 - iso.slddrt"
+            tb = d["title_block_mm"]
+            assert tb[0] > 200 and tb[1] < 30 and tb[2] <= 420 and tb[3] < 120  # bottom right of the A3 sheet
+            boxes = [v["outline_mm"] for v in d["views"]] + [tb]
+            for kw in ({"kind": "general", "cells": [["A", "B"]] + [[str(i), "x" * 12] for i in range(12)]},
+                       {"kind": "revision", "revisions": [{"rev": "A", "description": "INITIAL RELEASE"}]},
+                       {"kind": "general", "cells": [["P", "Q"], ["1", "2"]]}):
+                b = (await c.call("drawing_table", **kw))["box_mm"]
+                assert 0 < b[0] and b[2] < 420 and 0 < b[1] and b[3] < 297
+                assert all(clear(b, o) for o in boxes), (kw["kind"], b, boxes)
+                boxes.append(b)
+            _, images = await c.call("screenshot")
+            import base64
+            import io
+
+            from PIL import Image as PILImage
+
+            im = PILImage.open(io.BytesIO(base64.b64decode(images[0].data))).convert("L")
+            w, h = im.size
+            edges = [im.crop(b) for b in ((0, 0, 3, h), (w - 3, 0, w, h), (0, 0, w, 3), (0, h - 3, w, h))]
+            assert all(e.getextrema()[0] > 200 for e in edges)  # the whole sheet is framed, nothing cut at the edges
+            assert "must be one of" in await c.fails("create_drawing", model="plate.sldprt", sheet="A3", sheet_format="nasa")
+            assert "does not exist" in await c.fails("sheets", action="add", name="Two", sheet_format="missing.slddrt")
+            two = await c.call("sheets", action="add", name="Two", size="A4V", sheet_format="iso")
+            assert two["active"] == "Two" and two["sheet_mm"] == [210.0, 297.0]
+        finally:
+            await c.call("close_document")
+            await c.call("close_document", name="plate.SLDPRT")
+
+    run(tmp_path, body)

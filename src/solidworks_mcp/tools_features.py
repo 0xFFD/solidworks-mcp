@@ -1042,7 +1042,8 @@ _DEFINITIONS = {
     "BaseRevolve": "IRevolveFeatureData2", "Fillet": "ISimpleFilletFeatureData2", "Chamfer": "IChamferFeatureData2",
     "Shell": "IShellFeatureData", "LPattern": "ILinearPatternFeatureData", "CirPattern": "ICircularPatternFeatureData",
     "HoleWzd": "IWizardHoleFeatureData2", "Draft": "IDraftFeatureData2", "Sweep": "ISweepFeatureData", "SweepCut": "ISweepFeatureData",
-    "Blend": "ILoftFeatureData", "BlendCut": "ILoftFeatureData",
+    "Blend": "ILoftFeatureData", "BlendCut": "ILoftFeatureData", "RefPlane": "IRefPlaneFeatureData",
+    "RefAxis": "IRefAxisFeatureData",
 }
 _HOLE_STANDARDS = {"ISO": "iso", "ANSI METRIC": "ansi_metric", "ANSI INCH": "ansi_inch"}
 
@@ -1101,12 +1102,12 @@ def edit_feature(
     end: Annotated[Literal["blind", "through_all", "through_all_both", "midplane", "up_to_next"] | None, Field(description="Extrude/cut: new end condition.")] = None,
     depth: Annotated[float | None, Field(description="Extrude/cut: depth in mm (direction 1). Hole: hole depth (makes it blind).")] = None,
     depth2: Annotated[float | None, Field(description="Extrude/cut: blind depth in the second direction; 0 removes the second direction.")] = None,
-    reverse: Annotated[bool | None, Field(description="Extrude/cut/revolve: flip direction 1.")] = None,
+    reverse: Annotated[bool | None, Field(description="Extrude/cut/revolve: flip direction 1. Reference plane: put it on the other side of its reference.")] = None,
     flip_side_to_cut: Annotated[bool | None, Field(description="Cut: remove the material outside the profile instead.")] = None,
     merge: Annotated[bool | None, Field(description="Boss: merge with the existing bodies.")] = None,
     angle: Annotated[float | None, Field(description="Degrees. Revolve: angle; draft: draft angle; chamfer: angle; circular pattern: total angle (equal spacing) or angle between instances.")] = None,
     radius: Annotated[float | None, Field(description="Fillet: radius in mm.")] = None,
-    distance: Annotated[float | None, Field(description="Chamfer: distance in mm.")] = None,
+    distance: Annotated[float | None, Field(description="Chamfer: distance in mm. Offset reference plane: offset in mm.")] = None,
     thickness: Annotated[float | None, Field(description="Shell: wall thickness in mm.")] = None,
     edges: Annotated[list[str] | None, Field(description="Fillet/chamfer: replace the edges it rounds ('edge@x,y,z', 'edge:N').")] = None,
     count: Annotated[int | None, Field(ge=1, description="Pattern: instances in direction 1 (including the seed).")] = None,
@@ -1121,12 +1122,16 @@ def edit_feature(
     profiles: Annotated[list[str] | None, Field(description="Loft: the profile sketches in order (replace, add or reorder sections). Sweep: [the new profile sketch].")] = None,
     path: Annotated[str | None, Field(description="Sweep: a new path sketch.")] = None,
     close: Annotated[bool | None, Field(description="Loft: close the loft back to its first profile (three or more profiles).")] = None,
+    refs: Annotated[list[str] | None, Field(description=(
+        "Reference plane: new references in the same order as it was made (e.g. ['face@0,10,0'] to re-base an offset plane "
+        "on a datum face, or [plane, edge] for an angled plane). Reference axis: its new references (a cylindrical face, "
+        "a linear edge, two planes or two points).") )] = None,
 ) -> dict:
     """Change how an existing feature is defined without rebuilding it from scratch: an extrude's end
     condition (blind to through-all and back), depth, direction and second side; revolve angle; fillet
     radius or edges; chamfer distance and angle; shell thickness; pattern counts and spacing; Hole Wizard
-    size, depth and end condition; draft angle; sweep diameter and twist. Plain driving dimensions can
-    also be changed with set_dimensions."""
+    size, depth and end condition; draft angle; sweep diameter and twist; a reference plane's references,
+    offset, angle and side; a reference axis's references. Plain driving dimensions can also be changed with set_dimensions."""
     doc = SW.active("part")
     C = SW.C
     f = g.feature_by_name(doc, feature)
@@ -1279,6 +1284,33 @@ def edit_feature(
             if merge is not None:
                 data.Merge = merge
                 changed.append("merge")
+        elif iface == "IRefPlaneFeatureData":
+            first = data.Constraint(0)
+            if refs is not None:
+                n = sum(1 for i in range(3) if data.Constraint(i))  # GetSelectionsCount is write-only here
+                if len(refs) != n:
+                    raise SwError(f"{feature} has {n} reference(s); give that many refs in the same order (replacing a reference keeps its role).")
+                for i, r in enumerate(refs):
+                    data.SetReference(i, g.resolve(doc, r).obj)
+                changed.append("refs")
+            if distance is not None:
+                if not first & C.swRefPlaneReferenceConstraint_Distance:
+                    raise unsupported("distance (the plane is not an offset plane)")
+                data.SetAngleOrDistance(0, mm(abs(distance)))
+                changed.append("distance")
+            if angle is not None:
+                if not first & C.swRefPlaneReferenceConstraint_Angle:
+                    raise unsupported("angle (the plane is not an angled plane)")
+                data.SetAngleOrDistance(0, rad(angle))
+                changed.append("angle")
+            if reverse is not None:
+                flip = C.swRefPlaneReferenceConstraint_OptionFlip
+                data.SetConstraint(0, (first & ~flip) | (flip if reverse else 0))
+                changed.append("reverse")
+        elif iface == "IRefAxisFeatureData":
+            if refs is not None:  # SolidWorks works out the axis type from the new references
+                data.SetSelections(_dispatch_array([g.resolve(doc, r).obj for r in refs]))
+                changed.append("refs")
         if iface == "IChamferFeatureData2" and angle is not None:
             data.EdgeChamferAngle = rad(angle)
             changed.append("angle")
@@ -1290,7 +1322,7 @@ def edit_feature(
         given = {k for k, v in dict(end=end, depth=depth, depth2=depth2, reverse=reverse, flip_side_to_cut=flip_side_to_cut, merge=merge, angle=angle,
                                     radius=radius, distance=distance, thickness=thickness, count=count, spacing=spacing, count2=count2,
                                     spacing2=spacing2, size=size, diameter=diameter, twist=twist, profiles=profiles, path=path,
-                                    close=close).items() if v is not None}
+                                    close=close, refs=refs).items() if v is not None}
         if ignored := sorted(given - set(changed)):
             raise unsupported(", ".join(ignored))
         if not changed:
@@ -1310,6 +1342,12 @@ def edit_feature(
     doc.EditRebuild3()
     out = result(doc, f, "feature")
     out["changed"] = changed
+    if t == "RefPlane":
+        arr = list(SW.cast(SW.cast(f.GetSpecificFeature2(), "IRefPlane").Transform, "IMathTransform").ArrayData)
+        out["plane"] = {"origin_mm": [round(to_mm(v), 4) + 0.0 for v in arr[9:12]], "normal": [round(v, 6) + 0.0 for v in arr[6:9]]}
+    elif t == "RefAxis":
+        ax = [round(to_mm(v), 4) + 0.0 for v in SW.cast(f.GetSpecificFeature2(), "IRefAxis").GetRefAxisParams()]
+        out["axis"] = {"start_mm": ax[:3], "end_mm": ax[3:6]}
     return out
 
 

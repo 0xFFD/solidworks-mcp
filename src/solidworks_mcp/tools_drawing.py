@@ -14,7 +14,7 @@ from . import shapes
 from .com import SW, const_name, doc_kind, mm, to_deg, to_mm
 from .errors import SwError
 from .registry import READ_ONLY, WRITES, app, tool
-from .tools_doc import TEMPLATE_PREFS, load_failure, paper_size
+from .tools_doc import TEMPLATE_PREFS, load_failure, new_drawing, paper_size
 
 # Symbol codes from the SolidWorks symbol library (gtol.sym); IGtol takes them as text.
 GCS = {
@@ -434,6 +434,77 @@ def _sheet_size(drw: Any) -> tuple[float, float]:
     return props[5], props[6]
 
 
+_FORMAT_STYLES = ("iso", "ansi", "din", "jis", "bsi", "gb")
+
+
+def _format_file(sheet_format: str, size: str) -> Path:
+    """Sheet format file (.slddrt) for a style name and paper size from SolidWorks' format folder, or a given path.
+    The file must exist: for a missing one SolidWorks opens its Sheet Format/Size dialog and waits for a click."""
+    if sheet_format.lower().endswith(".slddrt"):
+        return app().path(sheet_format, must_exist=True, suffixes=(".slddrt",))
+    style = sheet_format.strip().lower()
+    if style not in _FORMAT_STYLES:
+        raise SwError(f"sheet_format must be one of {', '.join(_FORMAT_STYLES)} or a .slddrt file.")
+    key = size.strip().upper().replace(" ", "")
+    prefix = {"A4V": "a4", "AV": "a"}.get(key, key.lower())
+    if style == "ansi":
+        style = "portrait" if key in ("A4V", "AV") else "landscape"
+    folders = [f for f in (SW.app.GetUserPreferenceStringValue(SW.C.swFileLocationsSheetFormat) or "").split(";") if f]
+    for folder in folders:
+        f = Path(folder) / f"{prefix} - {style}.slddrt"
+        if f.exists():
+            return f
+    have = sorted({x.stem for folder in folders if Path(folder).is_dir() for x in Path(folder).glob(f"{prefix} - *.slddrt")})
+    raise SwError(f"No '{style}' sheet format for size {size}" + (f"; available: {', '.join(have)}." if have else ".") +
+                  " Pass a .slddrt file instead.")
+
+
+def _apply_format(doc: Any, drw: Any, fmt: Path, size: str) -> int:
+    """Put a sheet format (border, zones, title block) on the active sheet, keeping its size, scale and projection.
+    Returns the number of format notes; raises if the format did not load or does not fit the sheet."""
+    C = SW.C
+    sh = SW.cast(drw.GetCurrentSheet(), "ISheet")
+    p = list(sh.GetProperties2())
+    if not fmt.exists():  # SolidWorks would ask for one in a dialog
+        raise SwError(f"Sheet format {fmt} does not exist.")
+    if not drw.SetupSheet5(sh.GetName(), paper_size(size), C.swDwgTemplateCustom, p[2], p[3], bool(p[4]), str(fmt), p[5], p[6], "Default", True):
+        raise SwError(f"SolidWorks could not apply the sheet format {fmt.name}.")
+    sh.SheetFormatVisible = True
+    doc.ForceRebuild3(True)
+    notes = _format_notes(drw)
+    if not notes:
+        raise SwError(f"The sheet format {fmt.name} did not load.")
+    w, h = _sheet_size(drw)
+    if any(n[2] > w + 1e-3 or n[3] > h + 1e-3 for n in notes):
+        raise SwError(f"The sheet format {fmt.name} is larger than the {size} sheet; choose a format for that size.")
+    return len(notes)
+
+
+def _format_notes(drw: Any) -> list[tuple[float, float, float, float]]:
+    """Extents (x0, y0, x1, y1, metres) of the sheet format's notes: zone labels and title block fields."""
+    out = []
+    n = SW.cast(drw.GetFirstView(), "IView").GetFirstNote()
+    while n is not None:
+        n = SW.cast(n, "INote")
+        e = n.GetExtent()
+        if e:
+            e = list(e)
+            out.append((min(e[0], e[3]), min(e[1], e[4]), max(e[0], e[3]), max(e[1], e[4])))
+        n = n.GetNext()
+    return out
+
+
+def _title_block(drw: Any) -> tuple[float, float, float, float] | None:
+    """Box (metres) around the title block: the format notes that are not zone labels along the border."""
+    w, h = _sheet_size(drw)
+    edge = 0.025
+    inner = [n for n in _format_notes(drw) if n[0] > edge and n[1] > edge and n[2] < w - edge and n[3] < h - edge]
+    if not inner:
+        return None
+    pad = 0.004
+    return (min(n[0] for n in inner) - pad, min(n[1] for n in inner) - pad, max(n[2] for n in inner) + pad, max(n[3] for n in inner) + pad)
+
+
 def _inherit_settings(drawing_doc: Any, model_path: Path) -> None:
     """Give the drawing the model's unit system, precision and drafting standard (drawing templates
     are often inch/ANSI by default while the part is metric)."""
@@ -590,6 +661,9 @@ def create_drawing(
     scale: Annotated[str | None, Field(description="Sheet scale like '1:2' or '2:1'; default chosen by SolidWorks.")] = None,
     annotations: Annotated[bool, Field(description="Import model dimensions, datums, GD&T, surface finish, notes and cosmetic threads into the views.")] = True,
     template: Annotated[str | None, Field(description="Drawing template (.drwdot); default is the SolidWorks default.")] = None,
+    sheet_format: Annotated[str | None, Field(description=(
+        "Border, zones and title block: a SolidWorks format style for the paper size (iso, ansi, din, jis, bsi, gb) or a "
+        ".slddrt file (a company format). The title block fills from the model's custom properties.") )] = None,
     save_as: Annotated[str | None, Field(description="Save the drawing as this .slddrw.")] = None,
 ) -> dict:
     """Create a drawing with the three standard views (and isometric) of a part or assembly, with the
@@ -611,11 +685,14 @@ def create_drawing(
     tpl = template or sw.GetUserPreferenceStringValue(getattr(C, TEMPLATE_PREFS["drawing"]))
     if not tpl or not Path(tpl).exists():
         raise SwError("No default drawing template is configured; pass template=<.drwdot>.")
-    doc = sw.NewDocument(tpl, paper_size(sheet), 0, 0)
+    fmt = _format_file(sheet_format, sheet) if sheet_format else None
+    doc = new_drawing(tpl, sheet)
     if doc is None:
         raise SwError("SolidWorks could not create the drawing.")
     doc = SW.cast(doc, "IModelDoc2")
     drw = SW.drawing(doc)
+    if fmt is not None:
+        _apply_format(doc, drw, fmt, sheet)
     w, h = _sheet_size(drw)
     sh = SW.cast(drw.GetCurrentSheet(), "ISheet")
     if scale:
@@ -647,6 +724,13 @@ def create_drawing(
     doc.ViewZoomtofit2()
     out: dict[str, Any] = {"drawing": doc.GetTitle(), "model": str(mpath), "projection": projection,
                            "sheet_mm": [round(to_mm(w), 1), round(to_mm(h), 1)], "views": _views(drw)}
+    if fmt is not None:
+        out["sheet_format"] = fmt.name
+        tb = _title_block(drw)
+        if tb:
+            out["title_block_mm"] = [round(to_mm(c), 1) for c in tb]
+            if any(_overlap(tuple(mm(c) for c in v["outline_mm"]), tb) for v in out["views"]):
+                out["warning"] = (out.get("warning", "") + " A view overlaps the title block; move it with view_dimensions or choose a smaller scale.").strip()
     if fit_note:
         out["warning"] = fit_note
     if save_as:
@@ -949,6 +1033,7 @@ def sheets(
     name: Annotated[str | None, Field(description="Sheet name (add, activate).")] = None,
     size: Annotated[str, Field(description="Paper size for a new sheet: A4, A4V, A3, A2, A1, A0, A, AV, B, C, D, E.")] = "A3",
     scale: Annotated[str, Field(description="Sheet scale for a new sheet, e.g. '1:1'.")] = "1:1",
+    sheet_format: Annotated[str | None, Field(description="add: border and title block, as in create_drawing (iso, ansi, din, jis, bsi, gb or a .slddrt file).")] = None,
 ) -> dict:
     """Sheets of the active drawing: list, add (for flat patterns, details or parts lists) or activate."""
     doc = SW.active("drawing")
@@ -964,9 +1049,12 @@ def sheets(
         first_angle = bool(list(SW.cast(drw.GetCurrentSheet(), "ISheet").GetProperties2())[4])
         paper = paper_size(size)
         template = getattr(C, "swDwgTemplate" + const_name("swDwgPaper", paper))
+        fmt = _format_file(sheet_format, size) if sheet_format else None
         if not drw.NewSheet4(name, paper, template, n, d, first_angle, "", 0, 0, "", 0, 0, 0, 0, 0, 0):
             raise SwError(f"SolidWorks could not add sheet '{name}'.")
         drw.ActivateSheet(name)
+        if fmt is not None:
+            _apply_format(doc, drw, fmt, size)
     elif action == "activate":
         if name not in names:
             raise SwError(f"No sheet named '{name}'. Sheets: {names}")
@@ -984,6 +1072,79 @@ def _table_template(name: str) -> str:
     return str(p)
 
 
+def _overlap(a: tuple, b: tuple, gap: float = 0.0) -> bool:
+    return a[0] < b[2] + gap and b[0] < a[2] + gap and a[1] < b[3] + gap and b[1] < a[3] + gap
+
+
+def _table_corner(ta: Any) -> tuple[float, float]:
+    """Where a table's position point sits on it, as fractions of its width and height from the bottom left:
+    the corner of its anchor type (a revision block is held by its top right, a general table by its top left)."""
+    return {1: (0.0, 1.0), 2: (1.0, 1.0), 3: (0.0, 0.0), 4: (1.0, 0.0)}.get(ta.AnchorType, (0.0, 1.0))
+
+
+def _table_size(ta: Any) -> tuple[float, float]:
+    return sum(ta.GetColumnWidth(i) for i in range(ta.ColumnCount)), sum(ta.GetRowHeight(i) for i in range(ta.RowCount))
+
+
+def _table_box(ta: Any) -> tuple[float, float, float, float] | None:
+    """Sheet box (metres) of a table; None for one held by a sheet format anchor (SolidWorks reports those at 0, 0)."""
+    if ta.Anchored:
+        return None
+    x, y = list(SW.cast(ta.GetAnnotation(), "IAnnotation").GetPosition())[:2]
+    w, h = _table_size(ta)
+    fx, fy = _table_corner(ta)
+    x0, y0 = x - fx * w, y - fy * h
+    return (x0, y0, x0 + w, y0 + h)
+
+
+def _place_table(drw: Any, ta: Any, kind: str) -> tuple[float, float]:
+    """Move a table (inserted with its top-left corner as the anchor point) to free space on the sheet: clear of
+    views, other tables and the title block, inside the border. Revision blocks go towards the top right, other
+    tables towards the bottom right just above the title block. Returns the top-left corner (metres)."""
+    w, h = _sheet_size(drw)
+    box = _table_box(ta)
+    tw, th = box[2] - box[0], box[3] - box[1]
+    taken = [tuple(mm(c) for c in v["outline_mm"]) for v in _views(drw)]
+    tb = _title_block(drw)
+    if tb:
+        taken.append(tb)
+    sv = SW.cast(drw.GetFirstView(), "IView")
+    for other in SW.cast_all(sv.GetTableAnnotations() or [], "ITableAnnotation"):
+        if SW.app.IsSame(other, ta) != 1 and (ob := _table_box(other)) is not None:
+            taken.append(ob)
+    margin, gap, step = 0.012, 0.004, 0.0025
+    if kind == "revision":
+        goal = (w - margin - tw, h - margin)
+    elif tb:
+        goal = (tb[2] - tw, tb[3] + gap + th)
+    else:
+        goal = (w - margin - tw, margin + th)
+    spots = []
+    x = margin
+    while x + tw <= w - margin + 1e-9:
+        y = margin + th
+        while y <= h - margin + 1e-9:
+            if not any(_overlap((x, y - th, x + tw, y), t, gap) for t in taken):
+                spots.append((math.hypot(x - goal[0], y - goal[1]), x, y))
+            y += step
+        x += step
+    if not spots:
+        raise SwError(f"There is no free space of {to_mm(tw):.0f} x {to_mm(th):.0f} mm on the sheet for the table; give position=, "
+                      "or add a sheet with sheets(action='add').")
+    _, x, y = min(spots)  # top-left corner; the table is moved by its own anchor corner
+    fx, fy = _table_corner(ta)
+    if not SW.cast(ta.GetAnnotation(), "IAnnotation").SetPosition2(x + fx * tw, y - th + fy * th, 0):
+        raise SwError("SolidWorks could not move the table.")
+    return x, y
+
+
+def _table_place_result(drw: Any, ta: Any, kind: str, position: list[float] | None) -> dict:
+    if position is None:
+        _place_table(drw, ta, kind)
+    box = _table_box(ta)
+    return {"box_mm": [round(to_mm(c), 1) for c in box]} if box else {}
+
+
 def _table_rows(ta: Any, limit: int = 30) -> list[list[str]]:
     return [[ta.Text2(r, c, True) for c in range(ta.ColumnCount)] for r in range(min(ta.RowCount, limit))]
 
@@ -998,7 +1159,7 @@ def drawing_table(
         "bom: parts list of an assembly view (with balloons); revision: revision block; hole: hole table of a face seen in a view; "
         "general: a table of given cells, or a tabulated (dash-number) table of the model's configurations."))],
     view: Annotated[str | None, Field(description="bom and hole: the view the table belongs to.")] = None,
-    position: Annotated[list[float] | None, Field(description="Table corner [x, y] in sheet mm (the corner given by anchor).")] = None,
+    position: Annotated[list[float] | None, Field(description="Table corner [x, y] in sheet mm (the corner given by anchor); default is free space clear of views, other tables and the title block.")] = None,
     anchor: Annotated[Literal["top_left", "top_right", "bottom_left", "bottom_right"], Field(description="Which table corner position refers to.")] = "top_right",
     balloons: Annotated[bool, Field(description="bom: add item balloons to the view.")] = True,
     revisions: Annotated[list[dict[str, str]] | None, Field(description="revision: rows to add, e.g. [{'rev': 'A', 'description': 'INITIAL RELEASE', 'approved': 'J. SMITH'}]; the date is filled in.")] = None,
@@ -1016,9 +1177,10 @@ def drawing_table(
     drw = SW.drawing(doc)
     C = SW.C
     w, h = _sheet_size(drw)
-    use_anchor = position is None
-    x, y = (mm(position[0]), mm(position[1])) if position else (0.0, 0.0)
-    anc = getattr(C, _ANCHORS[anchor])
+    # without a position the table goes in free-standing at the top left and is then moved to free space
+    use_anchor = False
+    x, y = (mm(position[0]), mm(position[1])) if position else (0.012, h - 0.012)
+    anc = getattr(C, _ANCHORS[anchor if position else "top_left"])
     if kind in ("bom", "hole") and not view:
         raise SwError(f"A {kind} table needs view=.")
     out: dict[str, Any] = {"table": kind}
@@ -1052,6 +1214,7 @@ def drawing_table(
         if [[str(v) for v in row] + [""] * (ncol - len(row)) for row in cells] != got:
             raise SwError(f"The table text did not come out as given: {got}")
         out.update(rows=len(cells), columns=ncol, cells=got)
+        out.update(_table_place_result(drw, ta, kind, position))
         return out
     if kind == "bom":
         v = _view(drw, view)
@@ -1124,6 +1287,7 @@ def drawing_table(
             raise SwError(f"The hole table is empty: no holes go through {face} as seen in {view}.")
     doc.ForceRebuild3(True)
     out["rows"] = _table_rows(ta)
+    out.update(_table_place_result(drw, ta, kind, position))
     return out
 
 

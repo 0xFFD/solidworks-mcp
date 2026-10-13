@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Sheet formats: `create_drawing(sheet_format=...)` and `sheets(action='add', sheet_format=...)` put a border, zones and
+  title block on the sheet (ISO, ANSI, DIN, JIS, BSI or GB for the paper size, or a company .slddrt); the title
+  block's position is reported.
+- `edit_feature` re-bases reference planes (new references, offset, angle, side) and reference axes (new
+  references), so datum planes follow a changed datum scheme; features built on them update.
+- Driving dimensions in 3D sketches: `modify_sketch` dimension ops give true lengths and point distances
+  (placed with `at:[x, y, z]`), so routes can be fully defined and later driven with `set_dimensions`;
+  `list_sketch` reports 3D sketches in model coordinates (it used to drop z).
+- `subassembly(action='save_out')` saves a virtual sub-assembly (or virtual part) to its own file, which the
+  assembly then references, so kits and installations can be released as separate documents.
 - `member_check` substantiates a straight member by hand calculation: section properties of the generated
   profiles (principal axes for angles), unsymmetric bending stress, deflection, average shear, Euler or Johnson
   buckling and margins of safety on yield, ultimate and buckling with chosen factors (no Simulation licence needed).
@@ -136,6 +146,12 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- Tables added without a position were stacked on the sheet's table anchor, on top of views and of each other;
+  they now go into free space clear of views, other tables and the title block (revision blocks top right).
+- Drawing screenshots cut off the right of the sheet when the window's shape differed from the image's; the
+  whole sheet is now framed.
+- A missing sheet format made SolidWorks open its Sheet Format/Size dialog and wait for a click; formats are
+  checked first and new drawings are created with SolidWorks' interactive prompts off.
 - A sketch relation that conflicted with existing ones was added anyway and left the sketch over-defined;
   it is now taken back out and reported.
 - `create_drawing` imported model dimensions into every view that could show them, so the same dimension

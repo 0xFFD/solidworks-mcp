@@ -578,6 +578,51 @@ def _dist3d(seg: Any, p: list[float]) -> float:
     return math.dist(p, list(q)[:3]) if q is not None else float("inf")
 
 
+def _seg_geom3d(seg: Any) -> dict:
+    """Describe a 3D sketch segment in model mm: type, start, end and true length."""
+    C = SW.C
+    seg = SW.cast(seg, "ISketchSegment")
+    t = seg.GetType()
+    r = lambda v: round(to_mm(v), 4) + 0.0  # noqa: E731
+    kind = {C.swSketchLINE: "line", C.swSketchARC: "arc", C.swSketchSPLINE: "spline"}.get(t, "curve")
+    if t == C.swSketchLINE:
+        ln = SW.cast(seg, "ISketchLine")
+        a, b = _xyz(ln.GetStartPoint2()), _xyz(ln.GetEndPoint2())
+    else:
+        curve = SW.cast(seg.GetCurve(), "ICurve")
+        _, t0, t1, _, _ = curve.GetEndParams()
+        a, b = (list(curve.Evaluate2(u, 0))[:3] for u in (t0, t1))
+    return {"type": kind, "start": [r(v) for v in a], "end": [r(v) for v in b], "length": r(seg.GetLength())}
+
+
+def _item_xyz(item: Any) -> list[float]:
+    """A model point (metres) on a 3D sketch segment (its middle) or point, for placing a dimension."""
+    seg = SW.try_cast(item, "ISketchSegment")
+    if seg is None:
+        return _xyz(item)
+    if seg.GetType() == SW.C.swSketchLINE:
+        ln = SW.cast(seg, "ISketchLine")
+        a, b = _xyz(ln.GetStartPoint2()), _xyz(ln.GetEndPoint2())
+        return [(a[i] + b[i]) / 2 for i in range(3)]
+    curve = SW.cast(seg.GetCurve(), "ICurve")
+    _, t0, t1, _, _ = curve.GetEndParams()
+    return list(curve.Evaluate2((t0 + t1) / 2, 0))[:3]
+
+
+def _resolve3d(doc: Any, sk: Any) -> None:
+    """Let SolidWorks solve a 3D sketch after a dimension change (some only solve on rebuild): close it,
+    rebuild and reopen it. The ISketch object stays valid."""
+    name = sketch_name(doc, sk)
+    doc.SketchManager.InsertSketch(True)
+    doc.EditRebuild3()
+    doc.ClearSelection2(True)
+    g.select(doc, f"sketch:{name}")
+    doc.EditSketch()
+    doc.ClearSelection2(True)
+    if doc.SketchManager.ActiveSketch is None:
+        raise SwError(f"SolidWorks did not reopen {name} after solving it; reopen it with edit_sketch.")
+
+
 def _sketch_item(sk: Any, ref: str) -> Any:
     """A sketch segment or point: 'seg:N', 'pt:N' (list_sketch indices), 'seg@x,y', 'pt@x,y' (nearest, sketch mm)
     or, in a 3D sketch, 'seg@x,y,z', 'pt@x,y,z' (model mm)."""
@@ -655,7 +700,7 @@ def _signature(sk: Any) -> list[str]:
 @tool(READ_ONLY)
 def list_sketch(
     sketch: Annotated[str | None, Field(description="Sketch name; default is the open sketch.")] = None,
-    near: Annotated[list[float] | None, Field(description="Sort by distance from this sketch point [x, y] (mm).")] = None,
+    near: Annotated[list[float] | None, Field(description="Sort by distance from this sketch point [x, y] (mm; [x, y, z] model mm in a 3D sketch).")] = None,
     limit: Annotated[int, Field(ge=1, le=500)] = 100,
 ) -> dict:
     """Segments and points of a sketch in sketch coordinates (mm), with the indices that modify_sketch
@@ -669,16 +714,30 @@ def list_sketch(
     else:
         sk = active_sketch(doc)
     segs = []
-    for i, s in enumerate(_segments(sk)):
-        info = _seg_geom(s)
-        row = {"i": i, **{k: v for k, v in info.items() if not k.startswith("_")}}
-        if near:
-            row["_d"] = _dist(info, (near[0], near[1]))
-        segs.append(row)
-    pts = [{"i": i, "at": [round(v, 4) + 0.0 for v in _xy(p)]} for i, p in enumerate(_points(sk))]
+    is3d = bool(sk.Is3D())
+    if is3d:  # model coordinates
+        if near and len(near) != 3:
+            raise SwError("In a 3D sketch 'near' is [x, y, z] in model mm.")
+        for i, s in enumerate(_segments(sk)):
+            row = {"i": i, **_seg_geom3d(s)}
+            if near:
+                row["_d"] = to_mm(_dist3d(s, [mm(v) for v in near]))
+            segs.append(row)
+        pts = [{"i": i, "at": [round(to_mm(v), 4) + 0.0 for v in _xyz(p)]} for i, p in enumerate(_points(sk))]
+    else:
+        for i, s in enumerate(_segments(sk)):
+            info = _seg_geom(s)
+            row = {"i": i, **{k: v for k, v in info.items() if not k.startswith("_")}}
+            if near:
+                row["_d"] = _dist(info, (near[0], near[1]))
+            segs.append(row)
+        pts = [{"i": i, "at": [round(v, 4) + 0.0 for v in _xy(p)]} for i, p in enumerate(_points(sk))]
     if near:
         segs.sort(key=lambda r: r.pop("_d"))
-        pts.sort(key=lambda r: math.dist(r["at"], near[:2]))
+        pts.sort(key=lambda r: math.dist(r["at"], near[:len(r["at"])]))
+    if is3d:
+        return {"sketch": sketch or sketch_name(doc, sk), "status": sketch_status(sk), "3d": True, "units": "model mm",
+                "segment_count": len(segs), "segments": segs[:limit], "point_count": len(pts), "points": pts[:limit]}
     return {"sketch": sketch or sketch_name(doc, sk), "status": sketch_status(sk), "segment_count": len(segs), "segments": segs[:limit],
             "point_count": len(pts), "points": pts[:limit], **SketchFrame(sk).describe()}
 
@@ -700,12 +759,24 @@ def _dimension(doc: Any, sk: Any, op: dict, items: list[str], to_model) -> dict:
         raise SwError("dimension needs items: one segment (length, diameter or radius) or two segments/points.")
     _select_items(doc, sk, items)
     at = op.get("at")
-    if at is None:  # beside the first item
-        info = _seg_geom(_sketch_item(sk, items[0])) if items[0].strip().lower().startswith("seg") else {}
-        base = info.get("center") or info.get("start") or [0, 0]
-        at = [base[0] + 5, base[1] + 5]
-    p = to_model(at)
+    is3d = bool(sk.Is3D())
     orient = (op.get("orientation") or "aligned").lower()
+    if is3d:
+        if orient != "aligned":
+            raise SwError("In a 3D sketch dimensions are aligned (true length); use relations along_x/y/z for the direction.")
+        if at is None:  # beside the first item
+            first = items[0].strip().lower()
+            base = [0.0, 0.0, 0.0] if first == "origin" else [to_mm(v) for v in _item_xyz(_sketch_item(sk, items[0]))]
+            at = [base[0] + 5, base[1] + 5, base[2] + 5]
+        if len(at) != 3:
+            raise SwError("In a 3D sketch 'at' is [x, y, z] in model mm.")
+        p = [mm(v) for v in at]
+    else:
+        if at is None:  # beside the first item
+            info = _seg_geom(_sketch_item(sk, items[0])) if items[0].strip().lower().startswith("seg") else {}
+            base = info.get("center") or info.get("start") or [0, 0]
+            at = [base[0] + 5, base[1] + 5]
+        p = to_model(at)
     add = {"aligned": doc.AddDimension2, "horizontal": doc.AddHorizontalDimension2, "vertical": doc.AddVerticalDimension2}.get(orient)
     if add is None:
         raise SwError("dimension orientation must be aligned, horizontal or vertical.")
@@ -720,6 +791,8 @@ def _dimension(doc: Any, sk: Any, op: dict, items: list[str], to_model) -> dict:
         r = d.SetSystemValue3(math.radians(v) if angular else mm(v), C.swSetValue_InAllConfigurations, None)
         if r not in (0, None):
             raise SwError(f"SolidWorks rejected {name} = {v}: it would over-define the sketch or is a driven dimension.")
+        if is3d:
+            _resolve3d(doc, sk)
     val = d.GetSystemValue3(C.swThisConfiguration, None)
     val = val[0] if isinstance(val, (tuple, list)) else val
     return {"dimension": name, "value": round(math.degrees(val), 6) if angular else to_mm(val), "unit": "deg" if angular else "mm"}
@@ -995,7 +1068,8 @@ def modify_sketch(
         "{op:'construction', items, on}, "
         "{op:'relation', type, items} (types: " + ", ".join(RELATIONS) + "), "
         "{op:'dimension', items, value, orientation:'aligned'|'horizontal'|'vertical', at:[x, y]} "
-        "(one line: length; circle: diameter; arc: radius; two items: distance, or the angle between two lines in degrees)."))],
+        "(one line: length; circle: diameter; arc: radius; two items: distance, or the angle between two lines in degrees; "
+        "in a 3D sketch true lengths and distances, at:[x, y, z] model mm)."))],
 ) -> dict:
     """Edit the open sketch: delete, move, copy, rotate, trim, extend, split, pattern, offset, convert model edges, sketch fillets and
     chamfers, construction geometry, relations and driving dimensions (their names work with set_dimensions)."""

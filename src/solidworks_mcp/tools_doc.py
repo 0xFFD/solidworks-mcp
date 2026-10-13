@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
@@ -144,7 +144,7 @@ def new_document(
     if not tpl or not Path(tpl).exists():
         raise SwError(f"No default {kind} template is configured in SolidWorks (Tools > Options > Default Templates). Pass template=<path to .{'prtdot' if kind == 'part' else 'asmdot' if kind == 'assembly' else 'drwdot'}>.")
     if kind == "drawing":
-        doc = sw.NewDocument(tpl, paper_size(sheet), 0, 0)
+        doc = new_drawing(tpl, sheet)
     else:
         doc = sw.NewDocument(tpl, 0, 0, 0)
     if doc is None:
@@ -155,6 +155,21 @@ def new_document(
     out = doc_summary(doc)
     out["template"] = tpl
     return out
+
+
+def new_drawing(tpl: str, sheet: str) -> Any:
+    """A new drawing document without SolidWorks' interactive prompts: the Sheet Format/Size dialog and the
+    model view command would wait for a click that never comes and hang the session."""
+    sw, C = SW.app, SW.C
+    prompts = (C.swDrawingShowSheetFormatDialog, C.swInsertViewForNewDrawing)
+    old = [sw.GetUserPreferenceToggle(t) for t in prompts]
+    for t in prompts:
+        sw.SetUserPreferenceToggle(t, False)
+    try:
+        return sw.NewDocument(tpl, paper_size(sheet), 0, 0)
+    finally:
+        for t, v in zip(prompts, old):
+            sw.SetUserPreferenceToggle(t, v)
 
 
 def paper_size(sheet: str) -> int:

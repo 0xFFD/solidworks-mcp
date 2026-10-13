@@ -33,7 +33,7 @@ Typical part workflow:
    (or model coordinates with coords="model"); polyline with radius draws any rounded outline and
    mirror:'both' makes symmetric copies. edit_sketch reopens an existing sketch; list_sketch and
    modify_sketch trim, offset, convert edges, add relations and driving dimensions, move or delete items.
-   start_sketch(on="3d") opens a 3D sketch for sweep paths.
+   start_sketch(on="3d") opens a 3D sketch for sweep paths; its relations (along_x/y/z) and dimensions (true length) fully define routes.
    finish_sketch(fully_define=true) closes it and reports whether it is fully defined.
 3. Features use the latest sketch unless one is named: extrude (boss or cut), revolve, sweep, loft, then
    fillet, chamfer, shell, hole (Hole Wizard: plain, counterbore, countersink, tapped, at exact
@@ -42,7 +42,7 @@ Typical part workflow:
    surface (surface bodies as split tools), knit_surfaces (into a solid when closed), thicken (skins), fill_surface, trim_surface, mould_split (core/cavity
    blocks for layup tools and moulds), delete_faces and move_faces (direct
    editing, e.g. defeaturing imported STEP parts), 'body:Name' references.
-   edit_feature changes an existing feature's end condition, depth, radius, thickness or pattern count.
+   edit_feature changes an existing feature's end condition, depth, radius, thickness or pattern count, and re-bases reference planes and axes.
    Sheet metal: sheet_metal_base (closed outline or open profile), edge_flange, miter_flange, jog (joggles), hem, forming_tool (dimples, flanged holes, louvres, ribs), sketched_bend, closed_corner, convert_to_sheet_metal, flat_pattern (blank size,
    flatten, DXF export); design_guide('sheet_metal') has bend radii and a tray recipe.
 4. Pick faces and edges with list_faces / list_edges (indices change after every feature) or by point:
@@ -57,14 +57,14 @@ Typical part workflow:
    add_surface_finish (GD&T on part or assembly component faces, carried into drawings); annotation_views groups them by viewing direction; dimxpert applies a
    complete automatic MBD scheme from chosen datum faces.
 7. Output: save_document (native files), export (STEP AP242/AP214/AP203, IGES, Parasolid, STL, 3MF, PDF,
-   DXF, DWG, PNG), create_drawing (standard views, model dimensions and GD&T), section_view, add_note;
+   DXF, DWG, PNG), create_drawing (standard views, model dimensions and GD&T; sheet_format='iso' or 'ansi' adds the border and title block), section_view, add_note;
    detail_view, projected_view, auxiliary_view, broken_view, breakout_section, add_view (incl. flat_pattern), sheets, drawing_dimension, view_dimensions,
-   drawing_table (bom with balloons, revision block, hole table).
+   drawing_table (bom with balloons, revision block, hole table; placed in free space unless given a position).
 Weldments: structural_member (tube, bar, angle, channel along sketch lines; frames, rigs, GSE), trim_members (corner trim/extend), end_cap, gusset, cut_list,
 member_check (hand-calc bending, deflection, buckling and margins of safety of a member; no Simulation needed).
 Assemblies: insert_component (origin at position), add_mate (incl. limit_distance/limit_angle travel stops, width,
 symmetric, gear, slot, hinge, rack_pinion, screw, universal_joint, cam), exploded_view (incl. radial steps), subassembly (form,
-dissolve), motion_study (motors, positions over time), list_components, interference_check, bom (mass budget).
+dissolve, save_out), motion_study (motors, positions over time), list_components, interference_check, bom (mass budget).
 Results are proposals for an engineer to review; check every model and drawing before release.
 """
 
