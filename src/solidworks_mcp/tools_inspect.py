@@ -526,30 +526,64 @@ def screenshot(
     return [meta, Image(data=buf.getvalue(), format="png")]
 
 
+_GDT_ZONES = ("position", "profile", "runout", "total_runout", "concentricity", "symmetry", "flatness", "parallelism",
+              "perpendicularity", "angularity")
+
+
+def _stack_model(doc_holder: list) -> Any:
+    """The model whose dimensions the stack reads (the drawing's model when a drawing is active), opened lazily."""
+    if not doc_holder:
+        doc = SW.active()
+        if doc_kind(doc) == "drawing":
+            view = SW.cast(SW.cast(SW.drawing(doc).GetFirstView(), "IView").GetNextView(), "IView")
+            model = SW.app.GetOpenDocumentByName(view.GetReferencedModelName()) if view is not None else None
+            if model is None:
+                raise SwError("The drawing has no model view to read dimensions from.")
+            doc = SW.cast(model, "IModelDoc2")
+        doc_holder.append(doc)
+    return doc_holder[0]
+
+
 @tool(READ_ONLY)
 def tolerance_stack(
     contributors: Annotated[list[dict[str, Any]], Field(min_length=1, description=(
         "The chain, each {dimension: 'D1@Sketch1', direction: 1 | -1} (nominal and tolerance read from the model; set "
-        "tolerances with view_dimensions) or {nominal, plus, minus, direction} in mm (minus as a positive number). "
-        "direction is +1 where the dimension adds to the result and -1 where it takes away."))],
+        "tolerances with view_dimensions), {nominal, plus, minus, direction} in mm (minus as a positive number), or a "
+        "geometric tolerance {gdt: 'position' | 'profile' | 'runout' | 'concentricity' | 'symmetry' | 'flatness' | ..., "
+        "tolerance: zone mm, bonus: extra zone at MMC mm, direction} (counted as +/- half the zone about nominal). "
+        "direction is +1 where the contributor adds to the result and -1 where it takes away. For 2D and 3D stacks give "
+        "angle: degrees between the contributor and the result's direction (it counts cos(angle)), or sensitivity: the "
+        "partial derivative of the result with respect to the contributor (it replaces direction)."))],
     requirement: Annotated[dict[str, float] | None, Field(description="Allowed result {min, max} in mm (e.g. a clearance), to check against.")] = None,
 ) -> dict:
-    """One-dimensional tolerance stack-up of a dimension chain: worst case and RSS (statistical) limits of the
-    result, such as a clearance, gap or fastener grip, checked against the requirement."""
-    doc = SW.active()
+    """Tolerance stack-up: worst case and RSS (statistical) limits of a result such as a clearance, gap, edge
+    distance or fastener grip, checked against the requirement. One-dimensional chains add the contributors;
+    2D and 3D stacks are linearised with each contributor's angle or sensitivity, and position, profile and other
+    geometric tolerances (with MMC bonus) count as their zones."""
     C = SW.C
-    if doc_kind(doc) == "drawing":  # read the dimensions from the model the drawing shows
-        view = SW.cast(SW.cast(SW.drawing(doc).GetFirstView(), "IView").GetNextView(), "IView")
-        model = SW.app.GetOpenDocumentByName(view.GetReferencedModelName()) if view is not None else None
-        if model is None:
-            raise SwError("The drawing has no model view to read dimensions from.")
-        doc = SW.cast(model, "IModelDoc2")
+    holder: list = []
     rows, chain = [], []
     for i, ct in enumerate(contributors):
         d = int(ct.get("direction", 1))
         if d not in (1, -1):
             raise SwError(f"contributors[{i}]: direction must be 1 or -1.")
-        if "dimension" in ct:
+        if "sensitivity" in ct:
+            sens = float(ct["sensitivity"])
+        elif "angle" in ct:
+            sens = d * math.cos(math.radians(float(ct["angle"])))
+        else:
+            sens = float(d)
+        if "gdt" in ct:
+            kind = str(ct["gdt"]).lower()
+            if kind not in _GDT_ZONES:
+                raise SwError(f"contributors[{i}]: gdt must be one of {', '.join(_GDT_ZONES)}.")
+            zone = float(ct.get("tolerance", 0)) + float(ct.get("bonus", 0))
+            if zone <= 0:
+                raise SwError(f"contributors[{i}]: give the {kind} tolerance zone (mm).")
+            nominal, plus, minus = 0.0, zone / 2, zone / 2
+            label = ct.get("name") or f"{kind} {zone:g}"
+        elif "dimension" in ct:
+            doc = _stack_model(holder)
             dim = doc.Parameter(str(ct["dimension"]))
             if dim is None:
                 raise SwError(f"contributors[{i}]: no dimension '{ct['dimension']}' in {doc.GetTitle()} (names as in the dimensions tool).")
@@ -562,11 +596,14 @@ def tolerance_stack(
             label = str(ct["dimension"])
         else:
             if "nominal" not in ct:
-                raise SwError(f"contributors[{i}] needs dimension or nominal.")
+                raise SwError(f"contributors[{i}] needs dimension, nominal or gdt.")
             nominal, plus, minus = float(ct["nominal"]), float(ct.get("plus", 0)), abs(float(ct.get("minus", ct.get("plus", 0))))
             label = ct.get("name") or f"#{i + 1}"
-        chain.append((nominal, plus, minus, d))
-        rows.append({"name": label, "direction": d, "nominal": round(nominal, 4), "plus": round(plus, 4), "minus": round(minus, 4)})
+        chain.append((nominal, plus, minus, sens))
+        row = {"name": label, "direction": d, "nominal": round(nominal, 4), "plus": round(plus, 4), "minus": round(minus, 4)}
+        if sens != d:
+            row["sensitivity"] = round(sens, 6)
+        rows.append(row)
     r = shapes.tolerance_stack(chain)
     out: dict[str, Any] = {"contributors": rows, "nominal": round(r["nominal"], 4), "mean": round(r["mean"], 4),
                            "worst_case": [round(v, 4) for v in r["worst_case"]], "rss": [round(v, 4) for v in r["rss"]]}

@@ -329,3 +329,23 @@ def test_solidworks_sample_gauge_table():
     t = gauge.parse_gauge_table(gauge.read_xlsx(f))
     g = gauge.find_gauge(t, "Gauge 14")
     assert g["thickness_mm"] == 2.0 and 2.0 in g["bend_radii_mm"] and t["k_factor"] == 0.5
+
+
+def test_tolerance_stack_2d_and_gdt_without_solidworks():
+    from solidworks_mcp.tools_inspect import tolerance_stack
+
+    # gap = 50 cos 60 (a 50 +/- 0.2 link at 60 deg to the gap) - 20 +/- 0.1, plus a 0.2 position zone with 0.1 MMC bonus
+    r = tolerance_stack(contributors=[
+        {"nominal": 50, "plus": 0.2, "minus": 0.2, "angle": 60, "name": "link"},
+        {"nominal": 20, "plus": 0.1, "minus": 0.1, "direction": -1},
+        {"gdt": "position", "tolerance": 0.2, "bonus": 0.1, "direction": -1}], requirement={"min": 4.5})
+    assert r["nominal"] == pytest.approx(5.0)
+    wc = 0.5 * 0.2 + 0.1 + 0.15
+    assert r["worst_case"] == pytest.approx([5 - wc, 5 + wc], abs=1e-4)
+    rss = (0.1**2 + 0.1**2 + 0.15**2) ** 0.5
+    assert r["rss"] == pytest.approx([5 - rss, 5 + rss], abs=1e-4)
+    assert r["contributors"][0]["sensitivity"] == pytest.approx(0.5) and r["worst_case_ok"] is True
+    s = tolerance_stack(contributors=[{"nominal": 10, "plus": 0.1, "sensitivity": -2.0}])
+    assert s["nominal"] == pytest.approx(-20) and s["worst_case"] == pytest.approx([-20.2, -19.8])
+    with pytest.raises(SwError, match="gdt must be"):
+        tolerance_stack(contributors=[{"gdt": "wobble", "tolerance": 0.1}])

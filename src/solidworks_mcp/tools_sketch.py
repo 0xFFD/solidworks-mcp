@@ -117,6 +117,18 @@ _GLYPH_ADVANCE = {
 }
 
 
+def _glyph_span(st: Any, frame: SketchFrame, origin: tuple[float, float], u: tuple[float, float]) -> tuple[float, float] | None:
+    """Extent (metres) of a sketch text's outline along the text direction u, measured from origin; None when
+    SolidWorks has not generated the outline."""
+    vals = []
+    for e in SW.cast_all(st.GetEdges() or [], "IEdge"):
+        cp = SW.cast(e.GetCurveParams3(), "ICurveParamData")
+        for k in range(7):
+            q = frame.to_sketch(list(e.Evaluate2(cp.UMinValue + (cp.UMaxValue - cp.UMinValue) * k / 6, 0))[:3])
+            vals.append((q[0] - origin[0]) * u[0] + (q[1] - origin[1]) * u[1])
+    return (min(vals), max(vals)) if vals else None
+
+
 def _doubles(values: list[float]) -> Any:
     """SolidWorks array arguments must be explicit arrays of doubles; a Python list is not accepted."""
     import pythoncom
@@ -242,21 +254,24 @@ def _add(doc: Any, sm: Any, e: dict) -> list:
         txt = str(e.get("text", ""))
         if not txt:
             raise SwError("text needs a non-empty text.")
-        # One text entity per character at a fixed pitch: in a single text entity adjacent glyph
-        # outlines can touch, and SolidWorks then refuses to extrude or cut the whole string.
+        # One text entity per character: in a single text entity adjacent glyph outlines can touch, and
+        # SolidWorks then refuses to extrude or cut the whole string. Each glyph is measured from its outline
+        # and the next one starts a fixed gap after it, so any font is spaced like normal text.
         h = mm(e.get("height", 5))
         spacing = float(e.get("spacing", 1.0))
         ang = math.radians(e.get("angle", 0))
+        ux, uy = math.cos(ang), math.sin(ang)
+        gap = 0.14 * h * spacing
+        sk = sm.ActiveSketch
+        frame = SketchFrame(SW.cast(sk, "ISketch")) if sk is not None else None
         sm.DisplayWhenAdded = True  # text outlines are only generated when the text is displayed
         try:
             pos = 0.0
             for ch in txt:
-                adv = h * spacing * _GLYPH_ADVANCE.get(ch.upper(), 0.8)
-                if ch.isspace():
-                    pos += adv
+                if ch.isspace():  # a word space on top of the gap that already follows the last glyph
+                    pos += 0.3 * h * spacing
                     continue
-                st = doc.InsertSketchText(x + pos * math.cos(ang), y + pos * math.sin(ang), 0, ch, 0, 0, 0, 100, 0)
-                pos += adv
+                st = doc.InsertSketchText(x + pos * ux, y + pos * uy, 0, ch, 0, 0, 0, 100, 0)
                 if st is not None:
                     st = SW.cast(st, "ISketchText")
                     fmt = SW.cast(st.GetTextFormat(), "ITextFormat")
@@ -269,6 +284,13 @@ def _add(doc: Any, sm: Any, e: dict) -> list:
                         if ang:
                             fmt.Escapement = ang
                         st.SetTextFormat(False, fmt)
+                    span = _glyph_span(st, frame, (x, y), (ux, uy)) if frame is not None else None
+                    if span is not None:  # put the glyph's left edge at the cursor and move on past its right edge
+                        shift = pos - span[0]
+                        st.SetCoordinates(x + (pos + shift) * ux, y + (pos + shift) * uy, 0)
+                        pos = span[1] + shift + gap
+                    else:
+                        pos += h * spacing * _GLYPH_ADVANCE.get(ch.upper(), 0.8)
                 segs.append(st)
         finally:
             sm.DisplayWhenAdded = False
@@ -409,7 +431,7 @@ def sketch(
         "{type:'arc', center, start, end, direction:'ccw'|'cw'}, {type:'ellipse', center, radius_x, radius_y, angle}, "
         "{type:'polygon', center, sides, radius, inscribed, angle}, {type:'slot', start, end, width}, {type:'point', at}, {type:'spline', points}, "
         "{type:'airfoil', naca:'2412', chord, origin (leading edge), angle (degrees counterclockwise), points} (NACA 4-digit section as a closed profile), "
-        "{type:'text', at, text, height, angle, spacing, font, bold} (part number marking, at = start of the baseline, spacing scales the character pitch, default 1.0, font a Windows font name such as 'Arial' or a stencil font; extrude-cut it about 0.3 mm). "
+        "{type:'text', at, text, height, angle, spacing, font, bold} (part number marking, at = start of the baseline, characters are spaced from their measured outlines, spacing scales the gap between them, default 1.0, font a Windows font name such as 'Arial' or a stencil font; extrude-cut it about 0.3 mm). "
         "Any entity can carry mirror:'left_right' | 'up_down' | 'both' to add copies mirrored about the sketch axes, "
         "and construction:true to make it construction geometry. In a 3D sketch (start_sketch on='3d') points are [x, y, z] in model mm "
         "and the types are line, centerline, polyline (radius bends the corners, for tube and harness runs), arc {start, mid, end}, spline and point."))],
@@ -585,9 +607,9 @@ def _seg_geom3d(seg: Any) -> dict:
     t = seg.GetType()
     r = lambda v: round(to_mm(v), 4) + 0.0  # noqa: E731
     kind = {C.swSketchLINE: "line", C.swSketchARC: "arc", C.swSketchSPLINE: "spline"}.get(t, "curve")
-    if t == C.swSketchLINE:
-        ln = SW.cast(seg, "ISketchLine")
-        a, b = _xyz(ln.GetStartPoint2()), _xyz(ln.GetEndPoint2())
+    if t in (C.swSketchLINE, C.swSketchARC):  # an arc's curve is its whole circle, so take its own end points
+        ent = SW.cast(seg, "ISketchLine" if t == C.swSketchLINE else "ISketchArc")
+        a, b = _xyz(ent.GetStartPoint2()), _xyz(ent.GetEndPoint2())
     else:
         curve = SW.cast(seg.GetCurve(), "ICurve")
         _, t0, t1, _, _ = curve.GetEndParams()
@@ -605,6 +627,17 @@ def _item_xyz(item: Any) -> list[float]:
         a, b = _xyz(ln.GetStartPoint2()), _xyz(ln.GetEndPoint2())
         return [(a[i] + b[i]) / 2 for i in range(3)]
     curve = SW.cast(seg.GetCurve(), "ICurve")
+    if seg.GetType() == SW.C.swSketchARC:  # the curve is the whole circle: halfway between the arc's own ends
+        arc = SW.cast(seg, "ISketchArc")
+
+        def param(q: Any) -> float:
+            u = curve.ReverseEvaluate(*_xyz(q))
+            return float(u[0] if isinstance(u, (tuple, list)) else u)
+
+        t0, t1 = param(arc.GetStartPoint2()), param(arc.GetEndPoint2())
+        if t1 < t0:
+            t1 += 2 * math.pi
+        return list(curve.Evaluate2((t0 + t1) / 2, 0))[:3]
     _, t0, t1, _, _ = curve.GetEndParams()
     return list(curve.Evaluate2((t0 + t1) / 2, 0))[:3]
 
@@ -782,6 +815,7 @@ def _dimension(doc: Any, sk: Any, op: dict, items: list[str], to_model) -> dict:
         raise SwError("dimension orientation must be aligned, horizontal or vertical.")
     dd = _no_dim_prompt(lambda: add(p[0], p[1], p[2]))
     if dd is None:
+        doc.SetPickMode()  # a failed add leaves the dimension tool running, and the next dimension would fail too
         raise SwError("SolidWorks could not dimension the selection.")
     d = SW.cast(SW.cast(dd, "IDisplayDimension").GetDimension2(0), "IDimension")
     name = "@".join(d.FullName.split("@")[:2])

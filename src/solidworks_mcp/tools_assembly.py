@@ -389,7 +389,10 @@ def exploded_view(
     steps: Annotated[list[dict[str, Any]] | None, Field(description=(
         "Explode steps in order: {components: ['Bracket-1', ...], direction: 'x' | 'y' | 'z' | '-x' | '-y' | '-z' "
         "(assembly axes), distance: mm, rotate: degrees (optional), axis: 'x' | 'y' | 'z' (rotation axis, default the "
-        "direction axis)}. A step may only rotate (distance 0). {components, radial: true, distance} moves a ring of parts "
+        "direction axis)}. direction may also be a reference: along an edge or axis ('edge@Comp-1/x,y,z', from its start "
+        "to its end) or square to a planar face ('face@Comp-1/x,y,z', along its normal); a negative distance reverses it "
+        "(the result reports how far each component moved). A step may only rotate (distance 0). "
+        "{components, radial: true, distance} moves a ring of parts "
         "(bolts around a flange, fasteners around a bulkhead) straight out from their common centre axis. Omit steps to "
         "just show or hide the exploded view."))] = None,
     show: Annotated[bool, Field(description="Show the assembly exploded (true) or collapsed (false) afterwards.")] = True,
@@ -400,6 +403,7 @@ def exploded_view(
     asm = SW.assembly(doc)
     cfg = SW.cast(doc.ConfigurationManager.ActiveConfiguration, "IConfiguration")
     done = []
+    moved_names = sorted({c for st in steps or [] for c in st.get("components") or []})
     if steps:
         if not list(asm.GetExplodedViewNames() or []):
             asm.ShowExploded2(False, "")
@@ -428,10 +432,31 @@ def exploded_view(
                     raise SwError(f"steps[{i}]: SolidWorks could not add the radial step ({const_name('swCreateExplodeStepError_', err)}).")
                 done.append({"components": comps, "radial": True, "distance": dist})
                 continue
-            direction = str(st.get("direction", "y")).strip().lower()
+            direction = str(st.get("direction", "y")).strip()
+            if direction.lstrip("-+").lower() not in _AXES:
+                if "@" not in direction and ":" not in direction:
+                    raise SwError(f"steps[{i}]: direction must be x, y, z, -x, -y, -z, or an edge, axis or planar face reference.")
+                if angle:
+                    raise SwError(f"steps[{i}]: a step along a reference only moves; rotate in a step of its own about x, y or z.")
+                if not dist:
+                    raise SwError(f"steps[{i}] needs a distance.")
+                ref = g.resolve(doc, direction)
+                doc.ClearSelection2(True)
+                for c in comps:
+                    g.select(doc, c if c.startswith("comp:") else f"comp:{c}", mark=1)
+                res = cfg.AddExplodeStep2(mm(abs(dist)), 0, False, 0.0, 0, False, False, False)
+                step, err = (res if isinstance(res, tuple) else (res, 0))
+                doc.ClearSelection2(True)
+                if step is None:
+                    raise SwError(f"steps[{i}]: SolidWorks could not add the explode step ({const_name('swCreateExplodeStepError_', err)}).")
+                # the reference sets the step triad's Z axis (index 2): along an edge, or a face's normal
+                step = SW.cast(step, "IExplodeStep")
+                step.SetExplodeDirection(ref.obj, 2)
+                step.ReverseTranslationDirection = dist < 0
+                done.append({"components": comps, "direction": direction, "distance": dist})
+                continue
+            direction = direction.lower()
             reverse = direction.startswith("-")
-            if direction.lstrip("-+") not in _AXES:
-                raise SwError(f"steps[{i}]: direction must be x, y, z, -x, -y or -z.")
             doc.ClearSelection2(True)
             for c in comps:
                 g.select(doc, c if c.startswith("comp:") else f"comp:{c}", mark=1)
@@ -449,9 +474,21 @@ def exploded_view(
     names = list(asm.GetExplodedViewNames() or [])
     if not names:
         raise SwError("The assembly has no exploded view yet; give steps.")
+    out: dict[str, Any] = {"exploded_view": names[0], "steps_added": done, "exploded": show}
+    if moved_names:  # how far each component of these steps sits from its assembled position
+        def origins() -> dict[str, list[float]]:
+            return {n: _pose(g.find_component(doc, n))[1] for n in moved_names}
+
+        asm.ShowExploded2(False, names[0])
+        doc.EditRebuild3()
+        home = origins()
+        asm.ShowExploded2(True, names[0])
+        doc.EditRebuild3()
+        away = origins()
+        out["moved_mm"] = {n: [round(to_mm(a - b), 3) + 0.0 for a, b in zip(away[n], home[n])] for n in moved_names}
     asm.ShowExploded2(show, names[0])
     doc.EditRebuild3()
-    return {"exploded_view": names[0], "steps_added": done, "exploded": show}
+    return out
 
 
 def _last_mate(doc) -> str | None:

@@ -1504,6 +1504,13 @@ def test_3d_sketch_dimensions(tmp_path: Path):
             await c.call("set_dimensions", values={"D1@3DSketch1": 100})
             segs = (await c.call("list_sketch", sketch="3DSketch1"))["segments"]
             assert segs[2]["end"] == pytest.approx([100, 25, 60])
+            # a 3D arc lists its own ends (its curve is a whole circle) and takes a radius
+            await c.call("start_sketch", on="3d")
+            await c.call("sketch", entities=[{"type": "arc", "start": [0, 0, 0], "mid": [10, 10, 5], "end": [20, 0, 10]}])
+            arc = (await c.call("list_sketch"))["segments"][0]
+            assert arc["start"] == pytest.approx([0, 0, 0], abs=1e-4) and arc["end"] == pytest.approx([20, 0, 10], abs=1e-4)
+            assert (await c.call("modify_sketch", operations=[{"op": "dimension", "items": ["seg:0"], "value": 20}]))["done"][0]["value"] == 20
+            await c.call("finish_sketch")
         finally:
             await c.call("close_document")
 
@@ -1592,5 +1599,82 @@ def test_sheet_format_and_table_placement(tmp_path: Path):
         finally:
             await c.call("close_document")
             await c.call("close_document", name="plate.SLDPRT")
+
+    run(tmp_path, body)
+
+
+def test_explode_along_references(tmp_path: Path):
+    """Explode steps along a slanted edge and square to a face, checked against the measured movement."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "polyline", "closed": True, "points": [[0, 0], [40, 0], [0, 30]]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=5)
+        await c.call("save_document", path="wedge.sldprt")
+        await c.call("close_document")
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-2, -2], "corner2": [2, 2]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=4)
+        await c.call("save_document", path="pin.sldprt")
+        await c.call("close_document")
+        await c.call("new_document", kind="assembly")
+        try:
+            await c.call("insert_component", path="wedge.sldprt", position=[0, 0, 0])
+            await c.call("insert_component", path="pin.sldprt", position=[0, 20, 0])
+            await c.call("insert_component", path="pin.sldprt", position=[30, 20, 0])
+            edge = next(e for e in (await c.call("list_edges", component="wedge-1"))["edges"] if e["length"] == pytest.approx(50) and e["mid"][1] > 4)
+            out = await c.call("exploded_view", steps=[
+                {"components": ["pin-1"], "direction": f"edge@wedge-1/{','.join(str(v) for v in edge['mid'])}", "distance": 50},
+                {"components": ["pin-2"], "direction": "face@wedge-1/10,5,-10", "distance": -15},
+                {"components": ["pin-2"], "direction": "x", "distance": 10}])
+            d = [b - a for a, b in zip(edge["start"], edge["end"])]
+            n = math.sqrt(sum(v * v for v in d))
+            assert out["moved_mm"]["pin-1"] == pytest.approx([50 * v / n for v in d], abs=1e-3)  # along the edge, start to end
+            assert out["moved_mm"]["pin-2"] == pytest.approx([10, -15, 0], abs=1e-3)  # into the top face's normal, then along x
+            assert "only moves" in await c.fails("exploded_view", steps=[{"components": ["pin-1"], "direction": "face@wedge-1/10,5,-10", "distance": 5, "rotate": 30}])
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
+def test_assembly_drawing_references(tmp_path: Path):
+    """Reference dimensions between components and auxiliary views in an assembly drawing, kept clear of other views."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "polyline", "closed": True, "points": [[0, 0], [60, 0], [60, 20], [30, 40], [0, 40]]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=10)
+        await c.call("save_document", path="bk.sldprt")
+        await c.call("close_document")
+        await c.call("new_document", kind="assembly")
+        await c.call("insert_component", path="bk.sldprt", position=[0, 0, 0])
+        await c.call("insert_component", path="bk.sldprt", position=[100, 0, 0])
+        await c.call("save_document", path="pair.sldasm")
+        try:
+            d = await c.call("create_drawing", sheet="A3", isometric=False)
+            front, top = d["views"][0]["name"], d["views"][1]["name"]
+            span = ["edge@bk-1/0,10,-20", "edge@bk-2/160,10,-10"]
+            # edges seen end-on in the front view cannot be dimensioned there; the failure must not break the next dimension
+            assert "another view" in await c.fails("drawing_dimension", view=front, refs=span, orientation="horizontal")
+            assert (await c.call("drawing_dimension", view=top, refs=span, orientation="horizontal"))["value"] == pytest.approx(160)
+            assert (await c.call("drawing_dimension", view=top, refs=["edge@bk-1/60,10,-10", "edge@bk-2/100,10,-20"], orientation="horizontal"))["value"] == pytest.approx(40)
+            assert (await c.call("drawing_dimension", view=front, refs=["edge@bk-2/130,10,0"]))["value"] == pytest.approx(60)
+            await c.call("auxiliary_view", view=top, edge="edge@bk-2/145,10,-30", label="C")  # square to the chamfered face
+            await c.call("auxiliary_view", view=front, edge="edge@bk-2/130,10,0", label="D")
+            r = await c.call("drawing_views")
+            boxes = [v["outline_mm"] for v in r["views"]]
+            assert len(boxes) == 5
+            assert not any(a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3] for i, a in enumerate(boxes) for b in boxes[:i])
+            assert all(0 <= b[0] and b[2] <= r["sheet_mm"][0] and 0 <= b[1] and b[3] <= r["sheet_mm"][1] for b in boxes)
+        finally:
+            await c.call("close_document")
+            await c.call("close_document", name="pair.SLDASM")
 
     run(tmp_path, body)

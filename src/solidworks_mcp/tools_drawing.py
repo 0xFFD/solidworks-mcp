@@ -1022,9 +1022,49 @@ def auxiliary_view(
     doc.ClearSelection2(True)
     if v is None:
         raise SwError("SolidWorks could not create the auxiliary view; the edge must appear as a straight line in the parent view.")
-    out = _view_result(SW.cast(v, "IView"))
+    v = SW.cast(v, "IView")
+    out = {}
+    if not position:  # the view stays aligned with its parent, so slide it out along that line until it is clear
+        out = _slide_clear(drw, v, parent, w, h)
+    out = {**_view_result(v), **out}
     out["label"] = label
     return out
+
+
+def _slide_clear(drw: Any, v: Any, parent: Any, w: float, h: float, gap: float = 0.008) -> dict:
+    """Move a view aligned to its parent outward along the line between their centres until it overlaps no
+    other view; warn if that takes it off the sheet."""
+    def centre(view: Any) -> tuple[float, float]:
+        o = _outline(view)
+        return (o[0] + o[2]) / 2, (o[1] + o[3]) / 2
+
+    (px, py), (cx, cy) = centre(parent), centre(v)
+    d = math.hypot(cx - px, cy - py)
+    if d < 1e-6:
+        return {}
+    ux, uy = (cx - px) / d, (cy - py) / d
+    start = list(v.Position)[:2]
+    for _ in range(60):
+        o = _outline(v)
+        if o[0] < 0 or o[1] < 0 or o[2] > w or o[3] > h:
+            break
+        others = [tuple(mm(c) for c in r["outline_mm"]) for r in _views(drw) if r["name"] != v.Name]
+        if not any(_overlap(o, b, gap) for b in others):
+            return {}
+        x, y = list(v.Position)[:2]
+        _set_position(v, x + ux * 0.01, y + uy * 0.01)
+    # no room along the projection line: break the alignment (as drafting practice allows) and use free space near the parent
+    _set_position(v, *start)
+    v.RemoveAlignment()
+    o = _outline(v)
+    vw, vh = o[2] - o[0], o[3] - o[1]
+    others = [tuple(mm(c) for c in r["outline_mm"]) for r in _views(drw) if r["name"] != v.Name]
+    spot = _free_box(w, h, vw, vh, others, (cx - vw / 2, cy + vh / 2), gap=gap)
+    if spot is None:
+        return {"warning": "There is no free space on the sheet for the view; give position= or use a larger sheet."}
+    x, y = list(v.Position)[:2]
+    _set_position(v, x + spot[0] - o[0], y + spot[1] - o[3])
+    return {"aligned": False, "note": "No room along the projection line, so the view was placed unaligned (its view arrow and label identify it)."}
 
 
 @tool(WRITES)
@@ -1086,6 +1126,23 @@ def _table_size(ta: Any) -> tuple[float, float]:
     return sum(ta.GetColumnWidth(i) for i in range(ta.ColumnCount)), sum(ta.GetRowHeight(i) for i in range(ta.RowCount))
 
 
+def _free_box(w: float, h: float, bw: float, bh: float, taken: list[tuple], goal: tuple[float, float],
+              margin: float = 0.012, gap: float = 0.004, step: float = 0.0025) -> tuple[float, float] | None:
+    """Top-left corner (metres) nearest goal for a bw x bh box on a w x h sheet, clear of the taken boxes."""
+    best = None
+    x = margin
+    while x + bw <= w - margin + 1e-9:
+        y = margin + bh
+        while y <= h - margin + 1e-9:
+            if not any(_overlap((x, y - bh, x + bw, y), t, gap) for t in taken):
+                d = math.hypot(x - goal[0], y - goal[1])
+                if best is None or d < best[0]:
+                    best = (d, x, y)
+            y += step
+        x += step
+    return best[1:] if best else None
+
+
 def _table_box(ta: Any) -> tuple[float, float, float, float] | None:
     """Sheet box (metres) of a table; None for one held by a sheet format anchor (SolidWorks reports those at 0, 0)."""
     if ta.Anchored:
@@ -1112,26 +1169,18 @@ def _place_table(drw: Any, ta: Any, kind: str) -> tuple[float, float]:
     for other in SW.cast_all(sv.GetTableAnnotations() or [], "ITableAnnotation"):
         if SW.app.IsSame(other, ta) != 1 and (ob := _table_box(other)) is not None:
             taken.append(ob)
-    margin, gap, step = 0.012, 0.004, 0.0025
+    margin, gap = 0.012, 0.004
     if kind == "revision":
         goal = (w - margin - tw, h - margin)
     elif tb:
         goal = (tb[2] - tw, tb[3] + gap + th)
     else:
         goal = (w - margin - tw, margin + th)
-    spots = []
-    x = margin
-    while x + tw <= w - margin + 1e-9:
-        y = margin + th
-        while y <= h - margin + 1e-9:
-            if not any(_overlap((x, y - th, x + tw, y), t, gap) for t in taken):
-                spots.append((math.hypot(x - goal[0], y - goal[1]), x, y))
-            y += step
-        x += step
-    if not spots:
+    spot = _free_box(w, h, tw, th, taken, goal, margin, gap)
+    if spot is None:
         raise SwError(f"There is no free space of {to_mm(tw):.0f} x {to_mm(th):.0f} mm on the sheet for the table; give position=, "
                       "or add a sheet with sheets(action='add').")
-    _, x, y = min(spots)  # top-left corner; the table is moved by its own anchor corner
+    x, y = spot  # top-left corner; the table is moved by its own anchor corner
     fx, fy = _table_corner(ta)
     if not SW.cast(ta.GetAnnotation(), "IAnnotation").SetPosition2(x + fx * tw, y - th + fy * th, 0):
         raise SwError("SolidWorks could not move the table.")
@@ -1324,7 +1373,9 @@ def drawing_dimension(
     dd = _no_dim_prompt(lambda: add(x, y, 0))
     doc.ClearSelection2(True)
     if dd is None:
-        raise SwError("SolidWorks could not dimension that selection; use edges seen as lines or points in the view.")
+        doc.SetPickMode()  # a failed add leaves the dimension tool running, and the next dimension would fail too
+        raise SwError("SolidWorks could not dimension that selection; use edges seen as lines (or end-on as points) in the view, "
+                      "or another view.")
     d = SW.cast(SW.cast(dd, "IDisplayDimension").GetDimension2(0), "IDimension")
     angular = d.GetType() == SW.C.swDimensionParamTypeDoubleAngular
     val = d.SystemValue

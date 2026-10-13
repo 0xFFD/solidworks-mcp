@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `tolerance_stack` handles 2D and 3D stacks (each contributor's angle to the result, or its sensitivity) and
+  geometric tolerances (position, profile, runout and other zones, with MMC bonus), and no longer needs an open
+  document when every contributor is given as numbers.
+- Explode steps along a reference: `exploded_view` steps can move along an edge or axis or square to a planar face
+  (fasteners out along their own axis, panels off a skin), and the result reports how far each component moved.
 - Sheet formats: `create_drawing(sheet_format=...)` and `sheets(action='add', sheet_format=...)` put a border, zones and
   title block on the sheet (ISO, ANSI, DIN, JIS, BSI or GB for the paper size, or a company .slddrt); the title
   block's position is reported.
@@ -146,6 +151,14 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- Engraved text was spaced from a fixed table of character widths, so proportional fonts came out uneven;
+  each character is now measured from its outline and the next one placed a set gap after it.
+- `list_sketch` gave a 3D arc the same start and end point (its whole circle's), and dimensions placed by default
+  on one went to the wrong spot; arcs now report their own ends and midpoint.
+- After a dimension SolidWorks refused (in a drawing or a sketch), the next valid one failed too because the
+  dimension tool stayed active; it is now ended after a failure.
+- `auxiliary_view` could land on top of another view (SolidWorks keeps it on its projection line); it now slides
+  out along that line until clear, or is placed unaligned in free space when the line runs off the sheet.
 - Tables added without a position were stacked on the sheet's table anchor, on top of views and of each other;
   they now go into free space clear of views, other tables and the title block (revision blocks top right).
 - Drawing screenshots cut off the right of the sheet when the window's shape differed from the image's; the
