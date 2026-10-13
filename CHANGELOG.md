@@ -181,6 +181,9 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- `hole(size='Ø4', fastener='drill')` silently drilled Ø0.4 and 'Ø10' was refused: whole drill sizes are now written
+  as the tables have them ('Ø4.0'), other spellings are tried where SolidWorks refuses one, and a hole is kept only
+  when its size is the one asked for (otherwise nothing is created and the error says what SolidWorks offered).
 - STL and 3MF imports came in as graphics bodies (no mass, measurement or mates); they are now solids by default
   (`import_file(mesh_as=...)` for surface or graphics), and Parasolid imports, which opened without a window and
   left no active document, are shown and activated.

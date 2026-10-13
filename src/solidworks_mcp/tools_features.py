@@ -653,6 +653,13 @@ def hole(
     if any(len(p) != 3 for p in pts):
         raise SwError("Positions are [x, y, z] in model mm.")
     table = _FASTENERS[standard]
+    # drill sizes: the tables write whole sizes with a decimal ('Ø4.0', 'Ø10.0'); 'Ø4' would quietly match Ø0.4
+    import re
+
+    want = None
+    if m := re.fullmatch(r"[Øø⌀]\s*(\d+(?:\.\d+)?)", size.strip()):
+        want = float(m.group(1))
+        size = f"Ø{want:g}" + ("" if "." in f"{want:g}" else ".0")
     if fastener in ("tapped", "bottoming_tapped") and kind == "simple":
         kind = "tapped"  # a tapped table only makes sense for a tapped hole
     elif kind == "tapped" and fastener and "tapped" not in fastener:
@@ -709,18 +716,18 @@ def hole(
         doc.ClearSelection2(True)
         face_ref.select(doc, append=False)
 
-    if kind == "simple":
-        data = SW.cast(fm.CreateDefinition(C.swFmHoleWzd), "IWizardHoleFeatureData2")
-        data.InitializeHole(htype, std, fast, size, end_t)
-        try:
-            if depth:
-                data.HoleDepth = mm(depth)
-            data.HoleFit = _FIT[fit]
-        except Exception:
-            pass
-        pick()
-        feat = fm.CreateFeature(data)
-    else:
+    def make(size_text: str) -> Any:
+        if kind == "simple":
+            data = SW.cast(fm.CreateDefinition(C.swFmHoleWzd), "IWizardHoleFeatureData2")
+            data.InitializeHole(htype, std, fast, size_text, end_t)
+            try:
+                if depth:
+                    data.HoleDepth = mm(depth)
+                data.HoleFit = _FIT[fit]
+            except Exception:
+                pass
+            pick()
+            return fm.CreateFeature(data)
         v = [-1.0] * 12
         if kind == "counterbore":
             v[3] = _FIT[fit]
@@ -736,13 +743,34 @@ def hole(
             v[6] = C.swCosmeticThreadWithCallout if cosmetic_thread else C.swCosmeticThreadNone
             v[7] = C.swEndThreadTypeBLIND if depth else C.swEndThreadTypeTHROUGH_ALL
         pick()
-        feat = fm.HoleWizard5(htype, std, fast, size, end_t, -1.0, mm(depth) if depth else -1.0, -1.0, *v,
+        return fm.HoleWizard5(htype, std, fast, size_text, end_t, -1.0, mm(depth) if depth else -1.0, -1.0, *v,
                               "", False, True, True, True, True, False)
+
+    # a drill size is tried in the spellings SolidWorks may know it by ('Ø4.0' is refused on some curved faces where
+    # 'Ø4' works); a hole is kept only when the size SolidWorks names it with is the one asked for
+    spellings = [size] if want is None else list(dict.fromkeys([size, f"Ø{want:g}", f"Ø{want:.2f}"]))
+    feat, offered = None, None
+    for text in spellings:
+        made = make(text)
+        if made is None:
+            continue
+        made = SW.cast(made, "IFeature")
+        got = re.search(r"\(([\d.]+)\)", made.Name) if want is not None else None
+        if got and abs(float(got.group(1)) - want) > 1e-6:  # e.g. 'Ø4' quietly taken as Ø0.4
+            offered = got.group(1)
+            doc.ClearSelection2(True)
+            made.Select2(False, 0)
+            doc.Extension.DeleteSelection2(C.swDelete_Absorbed)
+            continue
+        feat = made
+        break
     if feat is None:
         doc.ClearSelection2(True)
+        if offered:
+            raise SwError(f"SolidWorks would not make a {size} drill hole here and offered Ø{offered} instead, so nothing was created. "
+                          "Try a neighbouring table size, or cut the hole from a sketched circle.")
         raise SwError(f"Hole Wizard rejected {kind} '{size}' ({standard}, {fname}). The size string must match the Hole Wizard table, "
                       "e.g. 'M6' for metric clearance/counterbore/tapped, '#10' or '1/4' for inch, 'Ø6.6' for ISO drill sizes.")
-    feat = SW.cast(feat, "IFeature")
     # exact positions: move the first point, add the rest
     sub, sk = _placement_sketch(feat)
     if sk.Is3D():  # a curved face: the single placement point moves in model coordinates

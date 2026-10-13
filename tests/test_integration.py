@@ -2204,3 +2204,58 @@ def test_equations_set_by_name(tmp_path: Path):
             await c.call("close_document")
 
     run(tmp_path, body)
+
+
+def test_core_features_revolve_shell_draft(tmp_path: Path):
+    """Revolve, shell, chamfer, circular pattern, cosmetic thread, draft, notes and surface finish, against hand calculations;
+    then open and activate documents."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Front")
+        await c.call("sketch", entities=[{"type": "centerline", "from": [0, -5], "to": [0, 50]}, {"type": "rectangle", "corner1": [0, 0], "corner2": [20, 40]}])
+        await c.call("finish_sketch")
+        cyl = await c.call("revolve", angle=360)
+        assert cyl["volume_mm3"] == pytest.approx(math.pi * 20**2 * 40, rel=1e-6)
+        cup = await c.call("shell", thickness=2, remove_faces=["face@0,40,10"])  # open at the top
+        assert cup["volume_mm3"] == pytest.approx(math.pi * (20**2 * 40 - 18**2 * 38), rel=1e-6)
+        ch = await c.call("chamfer", distance=1, edges=["edge@20,0,0"])  # bottom outer edge: a 1 x 1 triangle swept round
+        assert cup["volume_mm3"] - ch["volume_mm3"] == pytest.approx(0.5 * 2 * math.pi * (20 - 1 / 3), rel=1e-4)
+        await c.call("ref_axis", refs=["plane:Front", "plane:Right"])
+        # Ø4 on a curved wall: SolidWorks offers Ø0.4 instead, which must be refused rather than drilled
+        assert "offered" in await c.fails("hole", size="Ø4", fastener="drill", positions=[[20, 20, 0]])
+        seed = await c.call("hole", size="Ø5", fastener="drill", positions=[[20, 20, 0]])  # radial, through one wall
+        await c.call("circular_pattern", features=[seed["feature"]], axis="axis:Axis1", count=6)
+        holes = [f for f in (await c.call("list_faces", type="cylinder"))["faces"] if f.get("hole") and f["radius"] == pytest.approx(2.5)]
+        assert len(holes) == 6
+        thread = await c.call("cosmetic_thread", edge="edge@0,40,18", note="M40x1.5-6H", diameter=36.4, depth=10)
+        assert thread["type"] == "CosmeticThread"
+        await c.call("add_surface_finish", face="face@0,0,10", roughness="Ra 1.6")
+        await c.call("add_note", text="BREAK SHARP EDGES 0.2-0.5", position=[0, 50, 0])
+        await c.call("save_document", path="cup.sldprt")
+        await c.call("close_document")
+        # a drafted block: four sides drafted 5 deg from the base, a frustum
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-20, -20], "corner2": [20, 20]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=20)
+        out = await c.call("draft", angle=5, neutral="face@0,0,0", faces=["face@20,10,0", "face@-20,10,0", "face@0,10,20", "face@0,10,-20"])
+        top = 40 - 2 * 20 * math.tan(math.radians(5))
+        frustum = 20 / 3 * (40**2 + top**2 + 40 * top)
+        assert out["volume_mm3"] == pytest.approx(frustum, rel=1e-4) or out["volume_mm3"] == pytest.approx(
+            20 / 3 * (40**2 + (80 - top) ** 2 + 40 * (80 - top)), rel=1e-4)  # in or out, depending on the pull direction
+        await c.call("save_document", path="drafted.sldprt")
+        # documents: open the cup again (it is closed) and switch between the two
+        opened = await c.call("open_document", path="cup.sldprt")
+        assert opened["kind"] == "part" and opened["title"].lower().startswith("cup")
+        back = await c.call("activate_document", name="drafted.SLDPRT")
+        assert back["title"].lower().startswith("drafted")
+        d = await c.call("create_drawing", model="cup.sldprt", sheet="A3")
+        assert d["views"]
+        await c.call("add_note", text="UNLESS OTHERWISE SPECIFIED: DIMENSIONS IN MM", position=[30, 40])
+        await c.call("close_document")
+        for name in ("cup.SLDPRT", "drafted.SLDPRT"):
+            await c.call("close_document", name=name)
+
+    run(tmp_path, body)
