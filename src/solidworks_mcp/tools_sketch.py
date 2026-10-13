@@ -117,6 +117,83 @@ _GLYPH_ADVANCE = {
 }
 
 
+def _arc_text(doc: Any, sm: Any, e: dict) -> list[Any]:
+    """Text along a circle (markings on round housings, flanges, bosses): each character is measured upright,
+    then turned to the tangent and placed by arc length, centred on arc.angle. Clockwise text reads across the top
+    with the glyphs standing outward; counter-clockwise reads along the bottom with them hanging inward."""
+    arc = e["arc"]
+    txt = str(e.get("text", ""))
+    if not txt:
+        raise SwError("text needs a non-empty text.")
+    try:
+        cx, cy = (mm(float(v)) for v in arc["center"])
+        r = mm(float(arc["radius"]))
+    except (KeyError, TypeError, ValueError):
+        raise SwError("text.arc needs center: [x, y] and radius (mm).") from None
+    if r <= 0:
+        raise SwError("text.arc radius must be above 0.")
+    cw = str(arc.get("direction", "cw")).lower() != "ccw"
+    mid = math.radians(float(arc.get("angle", 90 if cw else 270)))
+    h = mm(e.get("height", 5))
+    spacing = float(e.get("spacing", 1.0))
+    gap = 0.14 * h * spacing
+    rough = sum(h * (spacing * 0.5 if ch.isspace() else _GLYPH_ADVANCE.get(ch.upper(), 0.8)) for ch in txt)
+    if rough > 2 * math.pi * r:  # clearly too long: refuse before placing anything
+        raise SwError(f"The text is about {to_mm(rough):.0f} mm long and does not fit round a {to_mm(r):.1f} mm radius.")
+    sk = sm.ActiveSketch
+    frame = SketchFrame(SW.cast(sk, "ISketch"))
+    glyphs: list[tuple[Any, float, float] | None] = []  # (text, left offset, width) per character; None for a space
+    sm.DisplayWhenAdded = True
+    try:
+        for ch in txt:
+            if ch.isspace():
+                glyphs.append(None)
+                continue
+            st = doc.InsertSketchText(cx, cy, 0, ch, 0, 0, 0, 100, 0)
+            if st is None:
+                raise SwError(f"SolidWorks rejected the character '{ch}'.")
+            st = SW.cast(st, "ISketchText")
+            fmt = SW.cast(st.GetTextFormat(), "ITextFormat")
+            fmt.CharHeight = h
+            if e.get("font"):
+                fmt.TypeFaceName = str(e["font"])
+            if e.get("bold"):
+                fmt.Bold = True
+            st.SetTextFormat(False, fmt)
+            span = _glyph_span(st, frame, (cx, cy), (1.0, 0.0))
+            if span is None:
+                span = (0.0, h * _GLYPH_ADVANCE.get(ch.upper(), 0.8))
+            glyphs.append((st, span[0], span[1] - span[0]))
+        widths = [g_[2] if g_ else 0.5 * h * spacing for g_ in glyphs]
+        total = sum(widths) + gap * (sum(1 for g_ in glyphs if g_) - 1)
+        if total > 2 * math.pi * r * 0.95:
+            doc.ClearSelection2(True)  # take the measured characters back out
+            for g_ in glyphs:
+                if g_:
+                    SW.cast(g_[0], "ISketchSegment").Select4(True, None)
+            doc.Extension.DeleteSelection2(0)
+            raise SwError(f"The text is {to_mm(total):.1f} mm long and does not fit round a {to_mm(r):.1f} mm radius.")
+        sign = -1.0 if cw else 1.0
+        pos = -total / 2  # arc length from the centre angle
+        for g_, w in zip(glyphs, widths):
+            if g_ is None:
+                pos += w
+                continue
+            st, left, width = g_
+            theta = mid + sign * (pos + width / 2) / r
+            esc = theta - math.pi / 2 if cw else theta + math.pi / 2
+            ux, uy = math.cos(esc), math.sin(esc)
+            mx, my = cx + r * math.cos(theta), cy + r * math.sin(theta)
+            st.SetCoordinates(mx - ux * (left + width / 2), my - uy * (left + width / 2), 0)
+            fmt = SW.cast(st.GetTextFormat(), "ITextFormat")
+            fmt.Escapement = esc
+            st.SetTextFormat(False, fmt)
+            pos += width + gap
+    finally:
+        sm.DisplayWhenAdded = False
+    return [g_[0] for g_ in glyphs if g_]
+
+
 def _glyph_span(st: Any, frame: SketchFrame, origin: tuple[float, float], u: tuple[float, float]) -> tuple[float, float] | None:
     """Extent (metres) of a sketch text's outline along the text direction u, measured from origin; None when
     SolidWorks has not generated the outline."""
@@ -249,6 +326,8 @@ def _add(doc: Any, sm: Any, e: dict) -> list:
         loop = shapes.airfoil_loop(str(e.get("naca", "0012")), chord, (ox, oy), float(e.get("angle", 0)), int(e.get("points", 40)))
         segs.append(sm.CreateSpline2(_doubles([c for x, y in loop for c in (x, y, 0.0)]), False))
         segs.append(sm.CreateLine(loop[-1][0], loop[-1][1], 0, loop[0][0], loop[0][1], 0))  # blunt trailing edge
+    elif t == "text" and e.get("arc"):
+        segs += _arc_text(doc, sm, e)
     elif t == "text":
         (x, y) = P("at")
         txt = str(e.get("text", ""))
@@ -431,7 +510,7 @@ def sketch(
         "{type:'arc', center, start, end, direction:'ccw'|'cw'}, {type:'ellipse', center, radius_x, radius_y, angle}, "
         "{type:'polygon', center, sides, radius, inscribed, angle}, {type:'slot', start, end, width}, {type:'point', at}, {type:'spline', points}, "
         "{type:'airfoil', naca:'2412', chord, origin (leading edge), angle (degrees counterclockwise), points} (NACA 4-digit section as a closed profile), "
-        "{type:'text', at, text, height, angle, spacing, font, bold} (part number marking, at = start of the baseline, characters are spaced from their measured outlines, spacing scales the gap between them, default 1.0, font a Windows font name such as 'Arial' or a stencil font; extrude-cut it about 0.3 mm). "
+        "{type:'text', at, text, height, angle, spacing, font, bold, arc: {center:[x, y], radius, angle (deg, where the text is centred), direction:'cw'|'ccw'}} (part number marking, at = start of the baseline, characters are spaced from their measured outlines, spacing scales the gap between them, default 1.0, font a Windows font name such as 'Arial' or a stencil font; extrude-cut it about 0.3 mm). "
         "Any entity can carry mirror:'left_right' | 'up_down' | 'both' to add copies mirrored about the sketch axes, "
         "and construction:true to make it construction geometry. In a 3D sketch (start_sketch on='3d') points are [x, y, z] in model mm "
         "and the types are line, centerline, polyline (radius bends the corners, for tube and harness runs), arc {start, mid, end}, spline and point."))],

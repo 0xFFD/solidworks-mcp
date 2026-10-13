@@ -1860,3 +1860,30 @@ def test_drawing_radial_dimensions_arranged(tmp_path: Path):
             await c.call("close_document", name="boss_plate.SLDPRT")
 
     run(tmp_path, body)
+
+
+def test_engraved_text_on_arc(tmp_path: Path):
+    """Part number and serial engraved round a disc, clockwise over the top and counter-clockwise under the bottom."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "circle", "center": [0, 0], "diameter": 80}])
+            await c.call("finish_sketch")
+            v0 = (await c.call("extrude", depth=6))["volume_mm3"]
+            await c.call("start_sketch", on="face@0,0,6")
+            assert "does not fit" in await c.fails("sketch", entities=[{"type": "text", "text": "X" * 60, "height": 5, "arc": {"center": [0, 0], "radius": 5}}])
+            out = await c.call("sketch", entities=[
+                {"type": "text", "text": "PN 4471-201 REV B", "height": 4, "arc": {"center": [0, 0], "radius": 30}},
+                {"type": "text", "text": "S/N 0042", "height": 4, "arc": {"center": [0, 0], "radius": 30, "direction": "ccw"}}])
+            assert [a["segments"] for a in out["added"]] == [14, 7]  # one text entity per character, spaces skipped
+            await c.call("finish_sketch")
+            cut = await c.call("extrude", cut=True, depth=0.3)
+            assert cut["type"] == "ICE" and cut["volume_mm3"] < v0
+            box = await c.call("bounding_box")
+            assert box["size"][0] == pytest.approx(80)  # the engraving stays inside the disc
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)

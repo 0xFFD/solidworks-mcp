@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Engraved text round an arc: `sketch` text with `arc={center, radius, angle, direction}` places each measured
+  character along the circle, centred on the angle (part numbers and serials on flanges and round housings).
 - `view_dimensions(arrange=True)` also moves diameter and radius dimensions, datums and tolerance frames that sit on
   a view into free space (re-measured after each move, since dimension text re-flows along its leader).
 - `mould_split(parting_surface=...)` splits the mould halves along a stepped or curved parting surface (a surface
