@@ -637,34 +637,57 @@ def _move_outline(view: Any, left: float | None = None, right: float | None = No
     _set_position(view, px + dx, py + dy)
 
 
-def _fit_views(drw: Any, w: float, h: float, margin: float = 0.01) -> str | None:
-    """Shift every view by the same amount so the group lies on the sheet (alignment is kept)."""
+def _fit_views(drw: Any, w: float, h: float) -> str | None:
+    """Shift every view by the same amount (alignment is kept) so the group lies inside the drawing area (inside the
+    sheet format's border) and, where there is room, off the title block."""
     vs = [SW.cast(v, "IView") for v in (SW.cast(drw.GetCurrentSheet(), "ISheet").GetViews() or [])]
     if not vs:
         return None
-    boxes = [_outline(v) for v in vs]
-    x0, y0 = min(b[0] for b in boxes), min(b[1] for b in boxes)
-    x1, y1 = max(b[2] for b in boxes), max(b[3] for b in boxes)
-    dx = (margin - x0) if x0 < margin else min(0.0, w - margin - x1)
-    dy = (margin - y0) if y0 < margin else min(0.0, h - margin - y1)
-    if dx or dy:
+    ax0, ay0, ax1, ay1 = _drawing_area(drw)
+
+    def shift(dx: float, dy: float) -> None:
         for v in vs:
             px, py = list(v.Position)[:2]
             _set_position(v, px + dx, py + dy)
-    if x1 - x0 > w - 2 * margin or y1 - y0 > h - 2 * margin:
-        return "The views do not fit on the sheet at this scale; use a smaller scale or a larger sheet."
+
+    boxes = [_outline(v) for v in vs]
+    x0, y0 = min(b[0] for b in boxes), min(b[1] for b in boxes)
+    x1, y1 = max(b[2] for b in boxes), max(b[3] for b in boxes)
+    dx = (ax0 - x0) if x0 < ax0 else min(0.0, ax1 - x1)
+    dy = (ay0 - y0) if y0 < ay0 else min(0.0, ay1 - y1)
+    if dx or dy:
+        shift(dx, dy)
+    if x1 - x0 > ax1 - ax0 or y1 - y0 > ay1 - ay0:
+        return "The views do not fit inside the border at this scale; use a smaller scale or a larger sheet."
+    tb = _title_block(drw)
+    if tb:
+        gap = 0.004
+        boxes = [_outline(v) for v in vs]
+        hit = [b for b in boxes if _overlap(b, tb, gap)]
+        if hit:
+            x0, y0 = min(b[0] for b in boxes), min(b[1] for b in boxes)
+            x1, y1 = max(b[2] for b in boxes), max(b[3] for b in boxes)
+            up = tb[3] + gap - min(b[1] for b in hit)
+            left = max(b[2] for b in hit) - (tb[0] - gap)
+            if y1 + up <= ay1:
+                shift(0.0, up)
+            elif x0 - left >= ax0:
+                shift(-left, 0.0)
+            else:
+                return "A view overlaps the title block at this scale; use a smaller scale or a larger sheet."
     return None
 
 
-def _fit_top_right(view: Any, w: float, h: float, margin: float = 0.015) -> None:
-    """Move a view into the upper-right corner of the sheet, halving its scale until it fits."""
+def _fit_top_right(view: Any, w: float, h: float, area: tuple[float, float, float, float] | None = None, margin: float = 0.015) -> None:
+    """Move a view into the upper-right corner of the drawing area, halving its scale until it fits."""
     try:
         for _ in range(4):
             x0, y0, x1, y1 = _outline(view)
             if x1 - x0 <= w * 0.38 and y1 - y0 <= h * 0.4:
                 break
             view.ScaleDecimal = view.ScaleDecimal / 2
-        _move_outline(view, right=w - margin, top=h - 3 * margin)
+        right, top = (area[2] - 0.005, area[3] - 0.01) if area else (w - margin, h - 3 * margin)
+        _move_outline(view, right=right, top=top)
     except Exception:
         pass
 
@@ -688,26 +711,30 @@ def _place_beside(view: Any, drw: Any, parent: str, direction: str, gap: float =
         own = view.Name
         x0, y0, x1, y1 = _outline(view)
         w, h = _sheet_size(drw)
-        margin = 0.01
+        ax0, ay0, ax1, ay1 = _drawing_area(drw)  # inside the sheet format's border
         others = [[mm(c) for c in v["outline_mm"]] for v in _views(drw) if v["name"] != own]
+        tb = _title_block(drw)
+        sv = SW.cast(drw.GetFirstView(), "IView")
+        others += ([list(tb)] if tb else []) + [list(b) for t in SW.cast_all(sv.GetTableAnnotations() or [], "ITableAnnotation")
+                                                if (b := _table_box(t)) is not None]
         par = [mm(c) for c in next(v for v in _views(drw) if v["name"] == parent)["outline_mm"]]
         if direction == "vertical":
             row = [(o[0], o[2]) for o in others if o[1] < y1 and o[3] > y0]
-            pos = _first_gap(row, par[2] + gap, x1 - x0, w - margin, gap)
+            pos = _first_gap(row, par[2] + gap, x1 - x0, ax1, gap)
             if pos is not None:
                 _move_outline(view, left=pos)
             else:  # mirror the search to the left of the parent
                 mirrored = [(w - b, w - a) for a, b in row]
-                pos = _first_gap(mirrored, w - par[0] + gap, x1 - x0, w - margin, gap)
+                pos = _first_gap(mirrored, w - par[0] + gap, x1 - x0, w - ax0, gap)
                 _move_outline(view, right=w - pos) if pos is not None else _move_outline(view, left=max(b for _, b in row) + gap)
         else:
             col = [(h - o[3], h - o[1]) for o in others if o[0] < x1 and o[2] > x0]  # measured downwards from the top
-            pos = _first_gap(col, h - par[1] + gap, y1 - y0, h - margin, gap)
+            pos = _first_gap(col, h - par[1] + gap, y1 - y0, h - ay0, gap)
             if pos is not None:
                 _move_outline(view, top=h - pos)
             else:
                 up = [(o[1], o[3]) for o in others if o[0] < x1 and o[2] > x0]
-                pos = _first_gap(up, par[3] + gap, y1 - y0, h - margin, gap)
+                pos = _first_gap(up, par[3] + gap, y1 - y0, ay1, gap)
                 _move_outline(view, bottom=pos) if pos is not None else _move_outline(view, top=min(o[1] for o in others) - gap)
     except Exception:
         pass
@@ -784,7 +811,7 @@ def create_drawing(
     if isometric:
         iso = drw.CreateDrawViewFromModelView3(str(mpath), "*Isometric", w * 0.78, h * 0.72, 0)
         if iso is not None:
-            _fit_top_right(SW.cast(iso, "IView"), w, h)
+            _fit_top_right(SW.cast(iso, "IView"), w, h, _drawing_area(drw))
     if annotations:
         types = 0
         for n in ("swInsertDimensionsMarkedForDrawing", "swInsertDatums", "swInsertDatumTargets", "swInsertGTols", "swInsertSFSymbols", "swInsertNotes",
@@ -800,6 +827,7 @@ def create_drawing(
         out["annotations"] = tidy
     if fmt is not None:
         out["sheet_format"] = fmt.name
+        out["drawing_area_mm"] = [round(to_mm(c), 1) for c in _drawing_area(drw)]
         tb = _title_block(drw)
         if tb:
             out["title_block_mm"] = [round(to_mm(c), 1) for c in tb]
@@ -931,9 +959,16 @@ def _view_model(view: Any) -> Any:
 
 
 def _free_spot(drw: Any, w: float, h: float) -> tuple[float, float]:
-    """Centre of the emptiest corner region of the sheet, for a new view without a position."""
+    """Centre of the emptiest region of the drawing area (inside the format's border), clear of views, tables and
+    the title block as far as possible, for a new view without a position."""
     occupied = [[mm(c) for c in v["outline_mm"]] for v in _views(drw)]
-    candidates = [(w * fx, h * fy) for fy in (0.75, 0.45) for fx in (0.2, 0.45, 0.7)]
+    tb = _title_block(drw)
+    if tb:
+        occupied.append(list(tb))
+    sv = SW.cast(drw.GetFirstView(), "IView")
+    occupied += [list(b) for t in SW.cast_all(sv.GetTableAnnotations() or [], "ITableAnnotation") if (b := _table_box(t)) is not None]
+    ax0, ay0, ax1, ay1 = _drawing_area(drw)
+    candidates = [(ax0 + (ax1 - ax0) * fx, ay0 + (ay1 - ay0) * fy) for fy in (0.8, 0.55, 0.3) for fx in (0.15, 0.4, 0.65, 0.85)]
 
     def clearance(pt: tuple[float, float]) -> float:
         return min((max(o[0] - pt[0], pt[0] - o[2], o[1] - pt[1], pt[1] - o[3]) for o in occupied), default=1.0)
@@ -990,7 +1025,25 @@ def add_view(
         v.UseSheetScale = False
         v.ScaleDecimal = sc[0] / sc[1]
     doc.ForceRebuild3(True)
-    return _view_result(v)
+    out = _view_result(v)
+    if not position:  # now its size is known: move it into clear space if it landed on something
+        o = _outline(v)
+        taken = [tuple(mm(c) for c in r["outline_mm"]) for r in _views(drw) if r["name"] != v.Name]
+        tb = _title_block(drw)
+        taken += [tb] if tb else []
+        sv = SW.cast(drw.GetFirstView(), "IView")
+        taken += [b for t in SW.cast_all(sv.GetTableAnnotations() or [], "ITableAnnotation") if (b := _table_box(t)) is not None]
+        area = _drawing_area(drw)
+        inside = area[0] <= o[0] and o[2] <= area[2] and area[1] <= o[1] and o[3] <= area[3]
+        if not inside or any(_overlap(o, t, 0.004) for t in taken):
+            spot = _free_box(area, o[2] - o[0], o[3] - o[1], taken, (o[0], o[3]), gap=0.008)
+            if spot is None:
+                out["warning"] = "There is no clear space on the sheet for the view; give position=, a smaller scale, or another sheet."
+            else:
+                px, py = list(v.Position)[:2]
+                _set_position(v, px + spot[0] - o[0], py + spot[1] - o[3])
+                out = _view_result(v)
+    return out
 
 
 @tool(WRITES)
@@ -1015,10 +1068,13 @@ def projected_view(
     if v is None:
         raise SwError(f"SolidWorks could not project a view from {view}.")
     v = SW.cast(v, "IView")
-    # slide it further out (staying aligned) while it overlaps another view
+    # slide it further out (staying aligned) while it overlaps another view, a table or the title block
+    tb = _title_block(drw)
+    sv = SW.cast(drw.GetFirstView(), "IView")
+    fixed = ([list(tb)] if tb else []) + [list(b) for t in SW.cast_all(sv.GetTableAnnotations() or [], "ITableAnnotation") if (b := _table_box(t)) is not None]
     for _ in range(10):
         a = _outline(v)
-        hits = [[mm(c) for c in o["outline_mm"]] for o in _views(drw) if o["name"] != v.Name]
+        hits = [[mm(c) for c in o["outline_mm"]] for o in _views(drw) if o["name"] != v.Name] + fixed
         hits = [b for b in hits if a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]]
         if not hits:
             break
@@ -1030,7 +1086,11 @@ def projected_view(
             _move_outline(v, bottom=max(b[3] for b in hits) + gp)
         else:
             _move_outline(v, top=min(b[1] for b in hits) - gp)
-    return _view_result(v)
+    out = _view_result(v)
+    o, area = _outline(v), _drawing_area(drw)
+    if o[0] < area[0] - 1e-4 or o[1] < area[1] - 1e-4 or o[2] > area[2] + 1e-4 or o[3] > area[3] + 1e-4:
+        out["warning"] = "The projected view runs past the border on its projection line; move the views apart, use a smaller scale or a larger sheet."
+    return out
 
 
 @tool(WRITES)

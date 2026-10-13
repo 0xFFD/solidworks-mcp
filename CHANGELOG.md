@@ -171,6 +171,14 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- Section and projected views were placed up to the sheet edge and could cover the title block or tables; they
+  now stay inside the format's border and treat the title block and tables as occupied (a projected view that
+  must run past the border on its projection line is reported).
+- Views added without a position (`add_view`, `detail_view`, `auxiliary_view`) were centred on fixed points of the
+  whole sheet and could land on other views, tables, the title block or the border; they now go to clear space
+  inside the drawing area once their size is known.
+- `create_drawing` with a set scale pushed the views up to the sheet edge, over the sheet format's border and
+  zone labels; they now stay inside the border and move up or left off the title block when it is in the way.
 - The drawing area of a sheet format counted title block fields near the bottom as zone labels, so placement
   stayed 30 mm clear of the bottom border; only the repeating zone labels are used now.
 - `create_drawing` put every datum symbol and feature control frame into each view that could show it, often on

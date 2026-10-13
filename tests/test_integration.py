@@ -1582,6 +1582,11 @@ def test_sheet_format_and_table_placement(tmp_path: Path):
             d = await c.call("create_drawing", sheet="A3", sheet_format="iso", projection="first")
             assert d["sheet_format"] == "a3 - iso.slddrt"
             tb = d["title_block_mm"]
+            sec = await c.call("section_view", view=d["views"][1]["name"], direction="horizontal")
+            o, area = sec["outline_mm"], d["drawing_area_mm"]
+            assert area[0] <= o[0] and o[2] <= area[2] and area[1] <= o[1] and o[3] <= area[3], (o, area)
+            assert o[2] <= tb[0] or tb[2] <= o[0] or o[3] <= tb[1] or tb[3] <= o[1], (o, tb)
+            d["views"] = (await c.call("drawing_views"))["views"]
             assert tb[0] > 200 and tb[1] < 30 and tb[2] <= 420 and tb[3] < 120  # bottom right of the A3 sheet
             boxes = [v["outline_mm"] for v in d["views"]] + [tb]
             for kw in ({"kind": "general", "cells": [["A", "B"]] + [[str(i), "x" * 12] for i in range(12)]},
@@ -1921,5 +1926,37 @@ def test_release_workflow(tmp_path: Path):
         finally:
             await c.call("close_document")
             await c.call("close_document", name="bracket.SLDPRT")
+
+    run(tmp_path, body)
+
+
+def test_scaled_views_inside_border(tmp_path: Path):
+    """At a set 1:1 scale the views are kept inside the ISO border and off the title block."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-100, -50], "corner2": [100, 50]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=60)
+        await c.call("save_document", path="slab.sldprt")
+        try:
+            d = await c.call("create_drawing", sheet="A3", sheet_format="iso", scale="1:1")
+            area, tb = d["drawing_area_mm"], d["title_block_mm"]
+            assert area[0] > 15  # the ISO binding margin, not the sheet edge
+            for v in d["views"]:
+                o = v["outline_mm"]
+                assert area[0] - 0.1 <= o[0] and o[2] <= area[2] + 0.1 and area[1] - 0.1 <= o[1] and o[3] <= area[3] + 0.1, (o, area)
+                assert o[2] <= tb[0] or tb[2] <= o[0] or o[3] <= tb[1] or tb[3] <= o[1], (o, tb)
+            assert "warning" not in d
+            # an extra view without a position goes into clear space inside the border
+            extra = await c.call("add_view", orientation="bottom", scale="1:4")
+            o = extra["outline_mm"]
+            others = [v["outline_mm"] for v in (await c.call("drawing_views"))["views"] if v["name"] != extra["view"]] + [tb]
+            assert all(o[2] <= b[0] or b[2] <= o[0] or o[3] <= b[1] or b[3] <= o[1] for b in others), (o, others)
+            assert area[0] <= o[0] and o[2] <= area[2] and area[1] <= o[1] and o[3] <= area[3]
+        finally:
+            await c.call("close_document")
+            await c.call("close_document", name="slab.SLDPRT")
 
     run(tmp_path, body)
