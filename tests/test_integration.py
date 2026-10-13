@@ -1760,3 +1760,30 @@ def test_custom_forming_tool(tmp_path: Path):
             await c.call("close_document")
 
     run(tmp_path, body)
+
+
+def test_drawing_gdt_shown_once_and_clear(tmp_path: Path):
+    """Datums and feature control frames appear once each on the drawing, off the views, inside the border."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-60, -40], "corner2": [60, 40]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=12)
+        await c.call("hole", size="Ø6.6", fastener="drill", positions=[[-40, 12, -20], [40, 12, -20], [40, 12, 20], [-40, 12, 20]])
+        for face, label in (("face@0,0,0", "A"), ("face@-60,6,0", "B"), ("face@0,6,40", "C")):
+            await c.call("add_datum", face=face, label=label)
+        await c.call("add_geometric_tolerance", face="face@0,12,0", characteristic="flatness", tolerance=0.05)
+        await c.call("add_geometric_tolerance", face="face@-36.7,6,-20", characteristic="position", tolerance=0.1, datums=["A", "B", "C"], diameter_zone=True)
+        await c.call("save_document", path="datum_plate.sldprt")
+        try:
+            d = await c.call("create_drawing", sheet="A3", sheet_format="iso")
+            ann = d["annotations"]
+            assert ann["gdt_annotations"] == 5  # three datums, two frames: one of each on the sheet
+            assert ann["duplicates_removed"] > 0 and ann["clear"] is True
+        finally:
+            await c.call("close_document")
+            await c.call("close_document", name="datum_plate.SLDPRT")
+
+    run(tmp_path, body)

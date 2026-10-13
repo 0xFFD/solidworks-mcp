@@ -494,6 +494,21 @@ def _format_notes(drw: Any) -> list[tuple[float, float, float, float]]:
     return out
 
 
+def _drawing_area(drw: Any) -> tuple[float, float, float, float]:
+    """Usable part of the sheet (metres): inside the sheet format's border, found from the zone labels that run
+    between its frames (ISO formats have a wider binding margin on the left), or 12 mm in from the edges."""
+    w, h = _sheet_size(drw)
+    x0, y0, x1, y1 = 0.012, 0.012, w - 0.012, h - 0.012
+    edge, pad = 0.03, 0.004
+    notes = _format_notes(drw)
+    left = [n[2] for n in notes if n[2] < edge and n[1] > edge and n[3] < h - edge]
+    right = [n[0] for n in notes if n[0] > w - edge and n[1] > edge and n[3] < h - edge]
+    bottom = [n[3] for n in notes if n[3] < edge and n[0] > edge and n[2] < w - edge]
+    top = [n[1] for n in notes if n[1] > h - edge and n[0] > edge and n[2] < w - edge]
+    return (max(left) + pad if left else x0, max(bottom) + pad if bottom else y0,
+            min(right) - pad if right else x1, min(top) - pad if top else y1)
+
+
 def _title_block(drw: Any) -> tuple[float, float, float, float] | None:
     """Box (metres) around the title block: the format notes that are not zone labels along the border."""
     w, h = _sheet_size(drw)
@@ -721,9 +736,12 @@ def create_drawing(
             types |= getattr(C, n)
         drw.InsertModelAnnotations3(C.swImportModelItemsFromEntireModel, types, True, True, False, False)
     doc.ForceRebuild3(True)
+    tidy = _tidy_annotations(doc, drw) if annotations else None
     doc.ViewZoomtofit2()
     out: dict[str, Any] = {"drawing": doc.GetTitle(), "model": str(mpath), "projection": projection,
                            "sheet_mm": [round(to_mm(w), 1), round(to_mm(h), 1)], "views": _views(drw)}
+    if tidy and tidy["gdt_annotations"]:
+        out["annotations"] = tidy
     if fmt is not None:
         out["sheet_format"] = fmt.name
         tb = _title_block(drw)
@@ -1046,7 +1064,8 @@ def _slide_clear(drw: Any, v: Any, parent: Any, w: float, h: float, gap: float =
     start = list(v.Position)[:2]
     for _ in range(60):
         o = _outline(v)
-        if o[0] < 0 or o[1] < 0 or o[2] > w or o[3] > h:
+        area = _drawing_area(drw)
+        if o[0] < area[0] or o[1] < area[1] or o[2] > area[2] or o[3] > area[3]:
             break
         others = [tuple(mm(c) for c in r["outline_mm"]) for r in _views(drw) if r["name"] != v.Name]
         if not any(_overlap(o, b, gap) for b in others):
@@ -1059,7 +1078,7 @@ def _slide_clear(drw: Any, v: Any, parent: Any, w: float, h: float, gap: float =
     o = _outline(v)
     vw, vh = o[2] - o[0], o[3] - o[1]
     others = [tuple(mm(c) for c in r["outline_mm"]) for r in _views(drw) if r["name"] != v.Name]
-    spot = _free_box(w, h, vw, vh, others, (cx - vw / 2, cy + vh / 2), gap=gap)
+    spot = _free_box(_drawing_area(drw), vw, vh, others, (cx - vw / 2, cy + vh / 2), gap=gap)
     if spot is None:
         return {"warning": "There is no free space on the sheet for the view; give position= or use a larger sheet."}
     x, y = list(v.Position)[:2]
@@ -1126,14 +1145,14 @@ def _table_size(ta: Any) -> tuple[float, float]:
     return sum(ta.GetColumnWidth(i) for i in range(ta.ColumnCount)), sum(ta.GetRowHeight(i) for i in range(ta.RowCount))
 
 
-def _free_box(w: float, h: float, bw: float, bh: float, taken: list[tuple], goal: tuple[float, float],
-              margin: float = 0.012, gap: float = 0.004, step: float = 0.0025) -> tuple[float, float] | None:
-    """Top-left corner (metres) nearest goal for a bw x bh box on a w x h sheet, clear of the taken boxes."""
+def _free_box(area: tuple[float, float, float, float], bw: float, bh: float, taken: list[tuple], goal: tuple[float, float],
+              gap: float = 0.004, step: float = 0.0025) -> tuple[float, float] | None:
+    """Top-left corner (metres) nearest goal for a bw x bh box inside area (x0, y0, x1, y1), clear of the taken boxes."""
     best = None
-    x = margin
-    while x + bw <= w - margin + 1e-9:
-        y = margin + bh
-        while y <= h - margin + 1e-9:
+    x = area[0]
+    while x + bw <= area[2] + 1e-9:
+        y = area[1] + bh
+        while y <= area[3] + 1e-9:
             if not any(_overlap((x, y - bh, x + bw, y), t, gap) for t in taken):
                 d = math.hypot(x - goal[0], y - goal[1])
                 if best is None or d < best[0]:
@@ -1169,14 +1188,15 @@ def _place_table(drw: Any, ta: Any, kind: str) -> tuple[float, float]:
     for other in SW.cast_all(sv.GetTableAnnotations() or [], "ITableAnnotation"):
         if SW.app.IsSame(other, ta) != 1 and (ob := _table_box(other)) is not None:
             taken.append(ob)
-    margin, gap = 0.012, 0.004
+    gap = 0.004
+    area = _drawing_area(drw)
     if kind == "revision":
-        goal = (w - margin - tw, h - margin)
+        goal = (area[2] - tw, area[3])
     elif tb:
         goal = (tb[2] - tw, tb[3] + gap + th)
     else:
-        goal = (w - margin - tw, margin + th)
-    spot = _free_box(w, h, tw, th, taken, goal, margin, gap)
+        goal = (area[2] - tw, area[1] + th)
+    spot = _free_box(area, tw, th, taken, goal, gap)
     if spot is None:
         raise SwError(f"There is no free space of {to_mm(tw):.0f} x {to_mm(th):.0f} mm on the sheet for the table; give position=, "
                       "or add a sheet with sheets(action='add').")
@@ -1185,6 +1205,108 @@ def _place_table(drw: Any, ta: Any, kind: str) -> tuple[float, float]:
     if not SW.cast(ta.GetAnnotation(), "IAnnotation").SetPosition2(x + fx * tw, y - th + fy * th, 0):
         raise SwError("SolidWorks could not move the table.")
     return x, y
+
+
+def _annotation_box(a: Any) -> tuple[float, float, float, float] | None:
+    """Sheet box (metres) of a datum symbol or feature control frame: its texts and the frame lines around them,
+    leaving out the leader or stem that runs to the feature."""
+    dd = SW.cast(a.GetDisplayData(), "IDisplayData")
+    if dd is None or not dd.GetTextCount():
+        return None
+    import re
+
+    texts = []
+    for i in range(dd.GetTextCount()):
+        x, y = list(dd.GetTextPositionAtIndex(i))[:2]
+        size = dd.GetTextHeightAtIndex(i)
+        chars = len(re.sub(r"<[^>]*>", "#", dd.GetTextAtIndex(i) or ""))  # a <SYMBOL> tag draws one glyph
+        texts.append((x, y, size, x + max(chars, 1) * 0.62 * size))
+    tx0, tx1 = min(t[0] for t in texts), max(t[3] for t in texts)
+    ty0, ty1 = min(t[1] for t in texts), max(t[1] + t[2] for t in texts)
+    band = 0.004
+    xs, ys = [tx0, tx1], [ty0, ty1]
+    for i in range(dd.GetLineCount()):
+        ln = list(dd.GetLineAtIndex3(i))
+        for x, y in ((ln[4], ln[5]), (ln[7], ln[8])):
+            if tx0 - band <= x <= tx1 + band and ty0 - band <= y <= ty1 + band:
+                xs.append(x)
+                ys.append(y)
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _gdt_annotations(drw: Any) -> list[tuple[Any, Any, str]]:
+    """(view, annotation, key) for every datum symbol and feature control frame on the sheet, in view order;
+    the key (type and text) is the same for the copies SolidWorks puts in each view that can show one."""
+    C = SW.C
+    out = []
+    v = SW.cast(drw.GetFirstView(), "IView").GetNextView()
+    while v is not None:
+        v = SW.cast(v, "IView")
+        for a in SW.cast_all(v.GetAnnotations() or [], "IAnnotation"):
+            t = a.GetType()
+            if t in (C.swDatumTag, C.swGTol) and a.Visible != C.swAnnotationHidden:
+                dd = SW.cast(a.GetDisplayData(), "IDisplayData")
+                text = "|".join(dd.GetTextAtIndex(i) for i in range(dd.GetTextCount())) if dd is not None else ""
+                out.append((v, a, f"{t}:{text}"))
+        v = v.GetNextView()
+    return out
+
+
+def _tidy_annotations(doc: Any, drw: Any) -> dict:
+    """Show each datum symbol and feature control frame once (in the first orthographic view that has it), and move
+    any that sit on a view, on each other, on the title block or off the drawing area into free space nearby."""
+    found = _gdt_annotations(drw)
+    iso = {v.Name for v, _, _ in found if (v.GetOrientationName() or "") in ("*Isometric", "*Trimetric", "*Dimetric")}
+    ordered = sorted(found, key=lambda r: r[0].Name in iso)  # orthographic views first, sheet order kept
+    keep, removed = {}, 0
+    for v, a, key in ordered:
+        if key in keep:  # imported model annotations cannot be deleted from a view, only hidden there
+            a.Visible = SW.C.swAnnotationHidden
+            removed += a.Visible == SW.C.swAnnotationHidden
+        else:
+            keep[key] = (v, a)
+    area = _drawing_area(drw)
+    taken = [tuple(mm(c) for c in r["outline_mm"]) for r in _views(drw)]
+    tb = _title_block(drw)
+    if tb:
+        taken.append(tb)
+    sv = SW.cast(drw.GetFirstView(), "IView")
+    taken += [b for t in SW.cast_all(sv.GetTableAnnotations() or [], "ITableAnnotation") if (b := _table_box(t)) is not None]
+    boxes = [(a, _annotation_box(a)) for _, a in keep.values()]
+    placed = [b for _, b in boxes if b is not None]
+    # notes and dimensions (hole callouts) only need bringing back onto the drawing area
+    C = SW.C
+    v = sv.GetNextView()
+    while v is not None:
+        v = SW.cast(v, "IView")
+        for a in SW.cast_all(v.GetAnnotations() or [], "IAnnotation"):
+            if a.GetType() in (C.swNote, C.swDisplayDimension) and a.Visible != C.swAnnotationHidden:
+                b = _annotation_box(a)
+                if b is not None and (b[0] < area[0] or b[1] < area[1] or b[2] > area[2] or b[3] > area[3]):
+                    boxes.append((a, b))
+                    placed.append(b)
+        v = v.GetNextView()
+    moved = 0
+    for a, b in boxes:
+        if b is None:
+            continue
+        others = [o for o in placed if o is not b]
+        off_area = b[0] < area[0] or b[1] < area[1] or b[2] > area[2] or b[3] > area[3]
+        if not off_area and not any(_overlap(b, t, 0.002) for t in taken + others):
+            continue
+        bw, bh = b[2] - b[0], b[3] - b[1]
+        spot = _free_box(area, bw, bh, taken + others, (b[0], b[3]), gap=0.003)
+        if spot is None:
+            continue
+        x, y = list(a.GetPosition())[:2]
+        if a.SetPosition2(x + spot[0] - b[0], y + spot[1] - b[3], 0):
+            moved += 1
+            nb = _annotation_box(a) or (spot[0], spot[1] - bh, spot[0] + bw, spot[1])
+            placed[placed.index(b)] = nb
+    doc.GraphicsRedraw2()
+    final = [b for a, _ in boxes if (b := _annotation_box(a)) is not None]
+    clear = all(area[0] - 1e-4 <= b[0] and area[1] - 1e-4 <= b[1] and b[2] <= area[2] + 1e-4 and b[3] <= area[3] + 1e-4 for b in final) and         not any(_overlap(b, t) for b in final for t in taken) and not any(_overlap(b, c) for i, b in enumerate(final) for c in final[:i])
+    return {"gdt_annotations": len(keep), "duplicates_removed": removed, "moved": moved, "clear": clear}
 
 
 def _table_place_result(drw: Any, ta: Any, kind: str, position: list[float] | None) -> dict:

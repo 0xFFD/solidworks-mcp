@@ -157,6 +157,9 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- `create_drawing` put every datum symbol and feature control frame into each view that could show it, often on
+  top of the geometry or outside the border; each is now shown once (in the first orthographic view) and moved
+  clear of views, tables, the title block and each other, inside the format's border.
 - Engraved text was spaced from a fixed table of character widths, so proportional fonts came out uneven;
   each character is now measured from its outline and the next one placed a set gap after it.
 - `list_sketch` gave a 3D arc the same start and end point (its whole circle's), and dimensions placed by default
