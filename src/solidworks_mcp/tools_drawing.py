@@ -547,10 +547,20 @@ def _drawing_area(drw: Any) -> tuple[float, float, float, float]:
     x0, y0, x1, y1 = 0.012, 0.012, w - 0.012, h - 0.012
     edge, pad = 0.03, 0.004
     notes = _format_notes(drw)
-    left = [n[2] for n in notes if n[2] < edge and n[1] > edge and n[3] < h - edge]
-    right = [n[0] for n in notes if n[0] > w - edge and n[1] > edge and n[3] < h - edge]
-    bottom = [n[3] for n in notes if n[3] < edge and n[0] > edge and n[2] < w - edge]
-    top = [n[1] for n in notes if n[1] > h - edge and n[0] > edge and n[2] < w - edge]
+
+    def labels(cands: list[tuple[float, float]]) -> list[float]:
+        """The zone labels of one side: the largest group of notes in a line (same offset from the edge); title
+        block fields near an edge sit at assorted offsets and are left out."""
+        groups: dict[int, list[float]] = {}
+        for key, val in cands:
+            groups.setdefault(round(key * 1000), []).append(val)
+        best = max(groups.values(), key=len, default=[])
+        return best if len(best) >= 2 else []
+
+    left = labels([(n[0], n[2]) for n in notes if n[2] < edge and n[1] > edge and n[3] < h - edge])
+    right = labels([(n[0], n[0]) for n in notes if n[0] > w - edge and n[1] > edge and n[3] < h - edge])
+    bottom = labels([(n[1], n[3]) for n in notes if n[3] < edge and n[0] > edge and n[2] < w - edge])
+    top = labels([(n[1], n[1]) for n in notes if n[1] > h - edge and n[0] > edge and n[2] < w - edge])
     return (max(left) + pad if left else x0, max(bottom) + pad if bottom else y0,
             min(right) - pad if right else x1, min(top) - pad if top else y1)
 
@@ -786,7 +796,7 @@ def create_drawing(
     doc.ViewZoomtofit2()
     out: dict[str, Any] = {"drawing": doc.GetTitle(), "model": str(mpath), "projection": projection,
                            "sheet_mm": [round(to_mm(w), 1), round(to_mm(h), 1)], "views": _views(drw)}
-    if tidy and tidy["gdt_annotations"]:
+    if tidy and (tidy["gdt_annotations"] or tidy["moved"]):
         out["annotations"] = tidy
     if fmt is not None:
         out["sheet_format"] = fmt.name
@@ -1319,40 +1329,51 @@ def _tidy_annotations(doc: Any, drw: Any) -> dict:
     sv = SW.cast(drw.GetFirstView(), "IView")
     taken += [b for t in SW.cast_all(sv.GetTableAnnotations() or [], "ITableAnnotation") if (b := _table_box(t)) is not None]
     boxes = [(a, _annotation_box(a)) for _, a in keep.values()]
-    placed = [b for _, b in boxes if b is not None]
-    # notes and dimensions (hole callouts) only need bringing back onto the drawing area
+    # diameter and radius dimensions are placed like the frames; other dimensions and notes stay where they are
+    # (arrange stacks the linear ones) unless they fall outside the drawing area
     C = SW.C
     v = sv.GetNextView()
     while v is not None:
         v = SW.cast(v, "IView")
         for a in SW.cast_all(v.GetAnnotations() or [], "IAnnotation"):
-            if a.GetType() in (C.swNote, C.swDisplayDimension) and a.Visible != C.swAnnotationHidden:
-                b = _annotation_box(a)
-                if b is not None and (b[0] < area[0] or b[1] < area[1] or b[2] > area[2] or b[3] > area[3]):
-                    boxes.append((a, b))
-                    placed.append(b)
+            if a.GetType() not in (C.swNote, C.swDisplayDimension) or a.Visible == C.swAnnotationHidden:
+                continue
+            b = _annotation_box(a)
+            if b is None:
+                continue
+            radial = a.GetType() == C.swDisplayDimension and                 SW.cast(a.GetSpecificAnnotation(), "IDisplayDimension").GetType() in (C.swDiameterDimension, C.swRadialDimension)
+            if radial or b[0] < area[0] or b[1] < area[1] or b[2] > area[2] or b[3] > area[3]:
+                boxes.append((a, b))
+            else:
+                taken.append(b)
         v = v.GetNextView()
-    moved = 0
-    for a, b in boxes:
-        if b is None:
-            continue
-        others = [o for o in placed if o is not b]
-        off_area = b[0] < area[0] or b[1] < area[1] or b[2] > area[2] or b[3] > area[3]
-        if not off_area and not any(_overlap(b, t, 0.002) for t in taken + others):
-            continue
-        bw, bh = b[2] - b[0], b[3] - b[1]
-        spot = _free_box(area, bw, bh, taken + others, (b[0], b[3]), gap=0.003)
-        if spot is None:
-            continue
-        x, y = list(a.GetPosition())[:2]
-        if a.SetPosition2(x + spot[0] - b[0], y + spot[1] - b[3], 0):
-            moved += 1
-            nb = _annotation_box(a) or (spot[0], spot[1] - bh, spot[0] + bw, spot[1])
-            placed[placed.index(b)] = nb
+    moved = set()
+    current = {id(a): b for a, b in boxes}
+    for _ in range(3):  # a dimension's text re-flows along its leader when moved, so measure again and retry
+        changed = False
+        for a, _b in boxes:
+            b = current[id(a)]
+            if b is None:
+                continue
+            others = [o for k, o in current.items() if k != id(a) and o is not None]
+            off_area = b[0] < area[0] or b[1] < area[1] or b[2] > area[2] or b[3] > area[3]
+            if not off_area and not any(_overlap(b, t, 0.002) for t in taken + others):
+                continue
+            bw, bh = b[2] - b[0], b[3] - b[1]
+            spot = _free_box(area, bw, bh, taken + others, (b[0], b[3]), gap=0.003)
+            if spot is None:
+                continue
+            x, y = list(a.GetPosition())[:2]
+            if a.SetPosition2(x + spot[0] - b[0], y + spot[1] - b[3], 0):
+                moved.add(id(a))
+                changed = True
+                current[id(a)] = _annotation_box(a) or (spot[0], spot[1] - bh, spot[0] + bw, spot[1])
+        if not changed:
+            break
     doc.GraphicsRedraw2()
     final = [b for a, _ in boxes if (b := _annotation_box(a)) is not None]
     clear = all(area[0] - 1e-4 <= b[0] and area[1] - 1e-4 <= b[1] and b[2] <= area[2] + 1e-4 and b[3] <= area[3] + 1e-4 for b in final) and         not any(_overlap(b, t) for b in final for t in taken) and not any(_overlap(b, c) for i, b in enumerate(final) for c in final[:i])
-    return {"gdt_annotations": len(keep), "duplicates_removed": removed, "moved": moved, "clear": clear}
+    return {"gdt_annotations": len(keep), "duplicates_removed": removed, "moved": len(moved), "clear": clear}
 
 
 def _table_place_result(drw: Any, ta: Any, kind: str, position: list[float] | None) -> dict:
@@ -1699,7 +1720,9 @@ def view_dimensions(
         "symmetric (± plus), bilateral (+plus / -minus), limit (shown as upper and lower size), min, max; ISO fits with "
         "{type: fit | fit_with_tolerance | fit_tolerance_only, hole: 'H7', shaft: 'g6'}."))] = None,
     decimals: Annotated[dict[str, int] | None, Field(description="Decimal places per dimension, {name: places}; the tolerance uses the same.")] = None,
-    arrange: Annotated[bool, Field(description="Stack the linear dimensions around the view in rows by size, shortest nearest the part, spacing apart (run before move).")] = False,
+    arrange: Annotated[bool, Field(description=(
+        "Stack the linear dimensions around the view in rows by size, shortest nearest the part, spacing apart, and move "
+        "diameter and radius dimensions, datums and tolerance frames on the sheet clear of the views (run before move)."))] = False,
     spacing: Annotated[float, Field(gt=0, description="arrange: distance between rows in sheet mm.")] = 8.0,
 ) -> dict:
     """List the dimensions shown in a drawing view with their values, tolerances and text positions (sheet
@@ -1726,6 +1749,7 @@ def view_dimensions(
         arranged = shapes.arrange_dimensions(linear, _outline(v), mm(spacing), clearance=mm(2), room=room)
         for name, (x, y) in arranged.items():
             SW.cast(by_name[name][0].GetAnnotation(), "IAnnotation").SetPosition2(x, y, 0.0)
+        tidy = _tidy_annotations(doc, drw)  # diameter and radius dimensions, datums and frames off the views
         x0, y0, x1, y1 = _outline(v)
         off = sorted(n for n, (x, y) in arranged.items()
                      if not (0 < x < sw_ and 0 < y < sh_) or y - y1 > room["top"] + 1e-6 or y0 - y > room["bottom"] + 1e-6
@@ -1794,6 +1818,7 @@ def view_dimensions(
         out["moved"] = sorted(move)
     if arrange:
         out["arranged"] = sorted(arranged)
+        out["annotations"] = tidy
         if off:
             out["warning"] = (f"{', '.join(off)} did not fit between the view and its neighbours or the sheet edge; "
                               "move the views apart or use a larger sheet.")

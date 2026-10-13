@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `view_dimensions(arrange=True)` also moves diameter and radius dimensions, datums and tolerance frames that sit on
+  a view into free space (re-measured after each move, since dimension text re-flows along its leader).
 - `mould_split(parting_surface=...)` splits the mould halves along a stepped or curved parting surface (a surface
   body through the part's parting line) instead of the flat plane.
 - `dimxpert(action='set_tolerance')` changes the plus/minus tolerance of DimXpert size and location annotations
@@ -161,6 +163,8 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- The drawing area of a sheet format counted title block fields near the bottom as zone labels, so placement
+  stayed 30 mm clear of the bottom border; only the repeating zone labels are used now.
 - `create_drawing` put every datum symbol and feature control frame into each view that could show it, often on
   top of the geometry or outside the border; each is now shown once (in the first orthographic view) and moved
   clear of views, tables, the title block and each other, inside the format's border.

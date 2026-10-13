@@ -1827,3 +1827,36 @@ def test_mould_split_stepped_parting(tmp_path: Path):
             await c.call("close_document")
 
     run(tmp_path, body)
+
+
+def test_drawing_radial_dimensions_arranged(tmp_path: Path):
+    """A diameter dimension dragged onto its view is moved clear again by view_dimensions(arrange=True)."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-60, -40], "corner2": [60, 40]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=12)
+        await c.call("start_sketch", on="face@0,12,0")
+        await c.call("sketch", entities=[{"type": "circle", "center": [0, 0], "diameter": 30}])
+        await c.call("modify_sketch", operations=[{"op": "dimension", "items": ["seg:0"], "value": 30}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=8)
+        await c.call("save_document", path="boss_plate.sldprt")
+        try:
+            d = await c.call("create_drawing", sheet="A3", sheet_format="iso", isometric=False)
+            top = d["views"][1]["name"]
+            dims = (await c.call("view_dimensions", view=top))
+            dia = next(x for x in dims["dimensions"] if x["value"] == pytest.approx(30))
+            o = dims["outline_mm"]
+            await c.call("view_dimensions", view=top, move={dia["name"]: [(o[0] + o[2]) / 2 + 20, (o[1] + o[3]) / 2]})
+            out = await c.call("view_dimensions", view=top, arrange=True)
+            assert out["annotations"]["moved"] >= 1 and out["annotations"]["clear"] is True
+            x, y = next(x for x in out["dimensions"] if x["name"] == dia["name"])["position_mm"]
+            assert not (o[0] < x < o[2] and o[1] < y < o[3])  # the text is off the view
+        finally:
+            await c.call("close_document")
+            await c.call("close_document", name="boss_plate.SLDPRT")
+
+    run(tmp_path, body)
