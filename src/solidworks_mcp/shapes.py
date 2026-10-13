@@ -490,3 +490,95 @@ def member_check(sec: dict, length: float, support: str, load_type: str, load: f
         out.update({"slenderness": slender, "buckling_mode": "euler" if slender >= transition else "johnson",
                     "critical_load": crit * area, "ms_buckling": crit * area / (ultimate_factor * -axial) - 1})
     return out
+
+
+_FORMULA_FUNCS = {name: getattr(math, name) for name in (
+    "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sqrt", "hypot", "radians", "degrees", "exp", "log")}
+_FORMULA_FUNCS.update(abs=abs, min=min, max=max)
+
+
+def formula(expression: str, names: list[str]):
+    """A function of the named values from an arithmetic expression (numbers, the names, pi, e, + - * / ** and the
+    math functions sin, cos, tan, asin, acos, atan, atan2, sqrt, hypot, radians, degrees, exp, log, abs, min, max).
+    Anything else is refused, so the expression cannot run code."""
+    import ast
+
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError as err:
+        raise SwError(f"The expression is not valid: {err.msg}.") from None
+    allowed_ops = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.USub, ast.UAdd, ast.Mod)
+    known = set(names) | {"pi", "e"}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Expression, ast.Load, ast.BinOp, ast.UnaryOp, *allowed_ops)):
+            continue
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            continue
+        if isinstance(node, ast.Name):
+            if node.id not in known and node.id not in _FORMULA_FUNCS:
+                raise SwError(f"Unknown name '{node.id}' in the expression; contributors are {', '.join(names)}.")
+            continue
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _FORMULA_FUNCS and not node.keywords:
+            continue
+        raise SwError(f"The expression may only use numbers, the contributor names and math functions ({type(node).__name__} is not allowed).")
+    code = compile(tree, "<stack>", "eval")
+    env = {"__builtins__": {}, "pi": math.pi, "e": math.e, **_FORMULA_FUNCS}
+
+    def f(values: dict[str, float]) -> float:
+        return float(eval(code, env, values))  # noqa: S307 - the tree was checked above
+
+    return f
+
+
+def formula_stack(expression: str, contributors: dict[str, tuple[float, float, float, str]], samples: int = 20000,
+                  seed: int = 1, requirement: tuple[float, float] | None = None) -> dict:
+    """Tolerance stack of a non-linear result: contributors {name: (nominal, plus, minus, distribution)} with minus as
+    a positive magnitude and distribution 'normal' (the tolerance band is +/-3 sigma about the mid-limit) or
+    'uniform'. Gives the result at nominal, the sensitivity of each contributor (central difference at the
+    mid-limits), the linearised worst case and RSS, and a Monte Carlo simulation (mean, standard deviation,
+    extremes, 0.135 % and 99.865 % points, and the fraction inside the requirement)."""
+    import random
+    import statistics
+
+    names = list(contributors)
+    f = formula(expression, names)
+    mids = {n: c[0] + (c[1] - c[2]) / 2 for n, c in contributors.items()}
+    halves = {n: (c[1] + c[2]) / 2 for n, c in contributors.items()}
+    try:
+        nominal = f({n: c[0] for n, c in contributors.items()})
+        mean_lin = f(mids)
+    except (ArithmeticError, ValueError) as err:
+        raise SwError(f"The expression cannot be evaluated at nominal: {err}.") from None
+    sens = {}
+    for n in names:
+        step = halves[n] or max(abs(mids[n]) * 1e-6, 1e-9)
+        hi, lo = dict(mids), dict(mids)
+        hi[n] += step
+        lo[n] -= step
+        sens[n] = (f(hi) - f(lo)) / (2 * step)
+    wc = sum(abs(sens[n]) * halves[n] for n in names)
+    rss = math.sqrt(sum((sens[n] * halves[n]) ** 2 for n in names))
+    rng = random.Random(seed)
+    results = []
+    for _ in range(samples):
+        vals = {}
+        for n, (_, _, _, dist) in contributors.items():
+            if dist == "uniform":
+                vals[n] = rng.uniform(mids[n] - halves[n], mids[n] + halves[n])
+            else:
+                vals[n] = rng.gauss(mids[n], halves[n] / 3)
+        try:
+            results.append(f(vals))
+        except (ArithmeticError, ValueError):
+            continue
+    if len(results) < samples * 0.99:
+        raise SwError("The expression fails for many sampled values (e.g. a square root of a negative); check it.")
+    results.sort()
+    q = lambda p: results[min(len(results) - 1, max(0, round(p * (len(results) - 1))))]  # noqa: E731
+    mc = {"samples": len(results), "mean": statistics.fmean(results), "std": statistics.pstdev(results),
+          "min": results[0], "max": results[-1], "p00135": q(0.00135), "p99865": q(0.99865)}
+    if requirement is not None:
+        lo_r, hi_r = requirement
+        mc["inside_fraction"] = sum(1 for v in results if lo_r <= v <= hi_r) / len(results)
+    return {"nominal": nominal, "mean": mean_lin, "sensitivity": sens, "worst_case": (mean_lin - wc, mean_lin + wc),
+            "rss": (mean_lin - rss, mean_lin + rss), "monte_carlo": mc}

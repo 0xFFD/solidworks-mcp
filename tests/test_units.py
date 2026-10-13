@@ -349,3 +349,17 @@ def test_tolerance_stack_2d_and_gdt_without_solidworks():
     assert s["nominal"] == pytest.approx(-20) and s["worst_case"] == pytest.approx([-20.2, -19.8])
     with pytest.raises(SwError, match="gdt must be"):
         tolerance_stack(contributors=[{"gdt": "wobble", "tolerance": 0.1}])
+
+
+def test_tolerance_stack_expression_tool():
+    from solidworks_mcp.tools_inspect import tolerance_stack
+
+    r = tolerance_stack(expression="L * cos(radians(t)) - c", requirement={"min": 55.5, "max": 57.2}, contributors=[
+        {"name": "L", "nominal": 100, "plus": 0.2, "minus": 0.2},
+        {"name": "t", "nominal": 30, "plus": 0.5, "minus": 0.5, "distribution": "uniform"},
+        {"name": "c", "nominal": 30, "plus": 0.1, "minus": 0.1}], samples=5000)
+    assert r["nominal"] == pytest.approx(100 * 0.8660254 - 30, abs=1e-4)
+    assert {c["name"]: c["sensitivity"] for c in r["contributors"]}["c"] == pytest.approx(-1)
+    assert r["monte_carlo"]["samples"] == 5000 and 0 < r["monte_carlo"]["inside_fraction"] <= 1
+    with pytest.raises(SwError, match="own name"):
+        tolerance_stack(expression="a + b", contributors=[{"nominal": 1, "plus": 0.1}, {"name": "b", "nominal": 1}])

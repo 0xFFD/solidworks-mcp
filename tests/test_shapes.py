@@ -261,3 +261,36 @@ def test_member_check_unsymmetric_angle_deflects_more():
     # an angle loaded along a leg bends about both principal axes: stiffer than Imin, softer than Ixx alone
     naive = 100 * 1000**3 / (3 * 70000 * a["ixx"])
     assert naive < r["deflection"] < 100 * 1000**3 / (3 * 70000 * a["imin"])
+
+
+def test_formula_stack_matches_linear_chain_and_simulates():
+    chain = {"a": (50, 0.1, 0.0, "normal"), "b": (20, 0.05, 0.05, "normal"), "c": (29.8, 0.0, 0.1, "normal")}
+    r = shapes.formula_stack("a - b - c", chain, samples=40000, seed=3)
+    lin = shapes.tolerance_stack([(50, 0.1, 0.0, 1), (20, 0.05, 0.05, -1), (29.8, 0.0, 0.1, -1)])
+    assert r["nominal"] == pytest.approx(lin["nominal"]) and r["mean"] == pytest.approx(lin["mean"])
+    assert r["worst_case"] == pytest.approx(lin["worst_case"]) and r["rss"] == pytest.approx(lin["rss"])
+    assert r["sensitivity"] == pytest.approx({"a": 1, "b": -1, "c": -1})
+    # each band is +/-3 sigma, so the simulated spread is the RSS of the thirds
+    assert r["monte_carlo"]["std"] == pytest.approx(math.sqrt(3 * 0.05**2) / 3, rel=0.03)
+    assert r["monte_carlo"]["mean"] == pytest.approx(lin["mean"], abs=5e-4)  # about 3.5 standard errors
+
+
+def test_formula_stack_nonlinear_sensitivities_and_yield():
+    # reach of a 100 mm link at 30 deg: x = L cos(t)
+    r = shapes.formula_stack("L * cos(radians(t))", {"L": (100, 0.2, 0.2, "normal"), "t": (30, 0.5, 0.5, "uniform")},
+                             samples=20000, requirement=(86.0, 87.2))
+    assert r["nominal"] == pytest.approx(100 * math.cos(math.radians(30)))
+    assert r["sensitivity"]["L"] == pytest.approx(math.cos(math.radians(30)), rel=1e-6)
+    assert r["sensitivity"]["t"] == pytest.approx(-100 * math.sin(math.radians(30)) * math.pi / 180, rel=1e-3)
+    assert 0 < r["monte_carlo"]["inside_fraction"] <= 1
+    lo, hi = r["worst_case"]
+    assert lo <= r["monte_carlo"]["p00135"] and r["monte_carlo"]["p99865"] <= hi  # the corners bound the simulation
+
+
+def test_formula_refuses_code():
+    for bad in ("__import__('os').system('x')", "a.real", "[a for a in b]", "open('f')", "a if b else c"):
+        with pytest.raises(SwError):
+            shapes.formula(bad, ["a", "b", "c"])
+    with pytest.raises(SwError, match="Unknown name"):
+        shapes.formula("a + z", ["a"])
+    assert shapes.formula("hypot(a, b) + pi * 0", ["a", "b"])({"a": 3, "b": 4}) == pytest.approx(5)

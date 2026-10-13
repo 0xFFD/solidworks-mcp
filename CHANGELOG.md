@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Non-linear tolerance stacks: `tolerance_stack(expression=...)` takes the result as a formula of named
+  contributors (linkages, angles, radii), derives each sensitivity from it and adds a Monte Carlo run (spread,
+  0.135/99.865 % points, fraction inside the requirement). The formula is checked so it cannot run code.
 - Engraved text round an arc: `sketch` text with `arc={center, radius, angle, direction}` places each measured
   character along the circle, centred on the angle (part numbers and serials on flanges and round housings).
 - `view_dimensions(arrange=True)` also moves diameter and radius dimensions, datums and tolerance frames that sit on

@@ -555,11 +555,19 @@ def tolerance_stack(
         "angle: degrees between the contributor and the result's direction (it counts cos(angle)), or sensitivity: the "
         "partial derivative of the result with respect to the contributor (it replaces direction)."))],
     requirement: Annotated[dict[str, float] | None, Field(description="Allowed result {min, max} in mm (e.g. a clearance), to check against.")] = None,
+    expression: Annotated[str | None, Field(description=(
+        "Non-linear result as a formula of the contributors' names, e.g. 'L * cos(radians(theta)) - gap' (numbers, + - * / **, "
+        "sin cos tan asin acos atan atan2 sqrt hypot radians degrees exp log abs min max, pi). Each contributor then needs a "
+        "name, and may give distribution 'normal' (band = +/-3 sigma) or 'uniform'; sensitivities come from the formula and a "
+        "Monte Carlo simulation is added."))] = None,
+    samples: Annotated[int, Field(ge=1000, le=200000, description="expression: Monte Carlo samples.")] = 20000,
 ) -> dict:
     """Tolerance stack-up: worst case and RSS (statistical) limits of a result such as a clearance, gap, edge
     distance or fastener grip, checked against the requirement. One-dimensional chains add the contributors;
     2D and 3D stacks are linearised with each contributor's angle or sensitivity, and position, profile and other
-    geometric tolerances (with MMC bonus) count as their zones."""
+    geometric tolerances (with MMC bonus) count as their zones. With an expression the result can be any formula of
+    the contributors (linkages, angles, radii): sensitivities are derived from it and a Monte Carlo run gives the
+    spread and the fraction inside the requirement."""
     C = SW.C
     holder: list = []
     rows, chain = [], []
@@ -604,6 +612,26 @@ def tolerance_stack(
         if sens != d:
             row["sensitivity"] = round(sens, 6)
         rows.append(row)
+    if expression:
+        names = [str(ct.get("name") or "") for ct in contributors]
+        if not all(n.isidentifier() for n in names) or len(set(names)) != len(names):
+            raise SwError("With an expression every contributor needs its own name (letters, digits and _), used in the formula.")
+        dists = [str(ct.get("distribution", "normal")).lower() for ct in contributors]
+        if any(d not in ("normal", "uniform") for d in dists):
+            raise SwError("distribution must be normal or uniform.")
+        req = (requirement.get("min", -math.inf), requirement.get("max", math.inf)) if requirement else None
+        fs = shapes.formula_stack(expression, {n: (c[0], c[1], c[2], d) for n, c, d in zip(names, chain, dists)}, samples, 1, req)
+        for row, n in zip(rows, names):
+            row["name"] = n
+            row["sensitivity"] = round(fs["sensitivity"][n], 6)
+            row.pop("direction", None)
+        mc = {k: (round(v, 6) if isinstance(v, float) else v) for k, v in fs["monte_carlo"].items()}
+        out_f: dict[str, Any] = {"expression": expression, "contributors": rows, "nominal": round(fs["nominal"], 4), "mean": round(fs["mean"], 4),
+                                 "worst_case": [round(v, 4) for v in fs["worst_case"]], "rss": [round(v, 4) for v in fs["rss"]], "monte_carlo": mc}
+        if req:
+            out_f["worst_case_ok"] = req[0] <= fs["worst_case"][0] and fs["worst_case"][1] <= req[1]
+            out_f["rss_ok"] = req[0] <= fs["rss"][0] and fs["rss"][1] <= req[1]
+        return out_f
     r = shapes.tolerance_stack(chain)
     out: dict[str, Any] = {"contributors": rows, "nominal": round(r["nominal"], 4), "mean": round(r["mean"], 4),
                            "worst_case": [round(v, 4) for v in r["worst_case"]], "rss": [round(v, 4) for v in r["rss"]]}
