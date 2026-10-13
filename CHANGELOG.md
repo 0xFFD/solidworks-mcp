@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `create_forming_tool` makes a forming tool (.sldftp) from a modelled punch with its stopping face and optional
+  faces to remove (pierced forms), for stiffening beads, joggled tabs and dimples the design library lacks.
+- `miter_flange(lip=...)` adds a return lip along the top of the flange, turned out (a Z section) or in over the part,
+  mitred at the corners like the flange.
+- Variable fillets along a chain of connected edges: `fillet(kind='variable', vertex_radii=[{vertex, radius}])` sets
+  the radius at every vertex (fairings, transitions); each radius is set on its vertex and read back.
 - `tolerance_stack` handles 2D and 3D stacks (each contributor's angle to the result, or its sensitivity) and
   geometric tolerances (position, profile, runout and other zones, with MMC bonus), and no longer needs an open
   document when every contributor is given as numbers.

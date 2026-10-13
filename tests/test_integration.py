@@ -1678,3 +1678,85 @@ def test_assembly_drawing_references(tmp_path: Path):
             await c.call("close_document", name="pair.SLDASM")
 
     run(tmp_path, body)
+
+
+def test_variable_fillet_along_chain(tmp_path: Path):
+    """A variable fillet along a line-arc-line chain with its own radius at each vertex, edges given out of order."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [0, 0], "corner2": [60, 40]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=20)
+            await c.call("fillet", radius=15, edges=["edge@60,10,0"])
+            chain = ["edge@60,20,-27.5", "edge@22.5,20,0", "edge@55.6066,20,-4.3934"]
+            assert "no radius for the chain vertex" in await c.fails("fillet", kind="variable", edges=chain, vertex_radii=[{"vertex": [0, 20, 0], "radius": 2}])
+            out = await c.call("fillet", kind="variable", edges=chain, vertex_radii=[
+                {"vertex": [60, 20, -40], "radius": 6}, {"vertex": [0, 20, 0], "radius": 2},
+                {"vertex": [45, 20, 0], "radius": 3}, {"vertex": [60, 20, -15], "radius": 5}])
+            assert len(out["vertex_radii"]) == 4
+            top = [e["start"] for e in (await c.call("list_edges", limit=60))["edges"] if abs(e["start"][1] - 20) < 1e-6 and abs(e["end"][1] - 20) < 1e-6]
+            # the top face now starts the vertex's radius in from each original vertex
+            for p in ([0, 20, -2], [45, 20, -3], [55, 20, -15], [54, 20, -40]):
+                assert any(q == pytest.approx(p, abs=1e-3) for q in top), (p, top)
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
+def test_miter_flange_with_lip(tmp_path: Path):
+    """Tray rims with a return lip: outward (a Z section) widens the tray by the lip, inward stays inside the blank."""
+
+    async def body(c: Session):
+        for lip, x_max, z_max in ((8, 58, 38), (-8, 50, 30)):
+            await c.call("new_document", kind="part")
+            try:
+                await c.call("start_sketch", on="plane:Top")
+                await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-50, -30], "corner2": [50, 30]}])
+                await c.call("finish_sketch")
+                await c.call("sheet_metal_base", thickness=2, bend_radius=2)
+                await c.call("miter_flange", edges=["edge@0,0,-30", "edge@50,0,0", "edge@0,0,30"], length=20, lip=lip)
+                box = await c.call("bounding_box")
+                assert box["max"][0] == pytest.approx(x_max) and box["max"][2] == pytest.approx(z_max) and box["min"][0] == pytest.approx(-50)
+                assert (await c.call("flat_pattern"))["bends"] == 6  # three flange bends and three lip bends
+            finally:
+                await c.call("close_document")
+
+    run(tmp_path, body)
+
+
+def test_custom_forming_tool(tmp_path: Path):
+    """A pierced boss modelled as a part, made into a forming tool, and formed into a sheet."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-20, -20], "corner2": [20, 20]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=5)
+        await c.call("start_sketch", on="face@0,5,0")
+        await c.call("sketch", entities=[{"type": "circle", "center": [0, 0], "diameter": 16}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=3)
+        assert "planar face" in await c.fails("create_forming_tool", stopping_face="face@8,6.5,0", save_as="bad.sldftp")
+        made = await c.call("create_forming_tool", stopping_face="face@15,5,15", remove_faces=["face@0,8,0"], save_as="flanged_hole.sldftp")
+        assert Path(made["file"]).exists()
+        await c.call("close_document")
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-50, -30], "corner2": [50, 30]}])
+            await c.call("finish_sketch")
+            await c.call("sheet_metal_base", thickness=1, bend_radius=1)
+            out = await c.call("forming_tool", tool_name="flanged_hole.sldftp", position=[10, 0, 0])
+            assert out["type"] == "FormToolInstance"
+            holes = [f for f in (await c.call("list_faces", type="cylinder"))["faces"] if f.get("hole")]
+            assert holes and holes[0]["axis_point"][0] == pytest.approx(10) and holes[0]["radius"] == pytest.approx(8)
+            assert (await c.call("bounding_box"))["size"][1] == pytest.approx(3)  # a 3 mm wall: the pierced end has no cap
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)

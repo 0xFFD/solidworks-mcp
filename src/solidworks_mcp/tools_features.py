@@ -353,10 +353,14 @@ def fillet(
     edges: Annotated[list[str] | None, Field(description="Edges to round ('edge:N', 'edge@x,y,z'). Variable: one edge.")] = None,
     faces: Annotated[list[str] | None, Field(description="Constant: round every edge of these faces. Face fillet: the first face set. Full round: [side face, centre face, side face].")] = None,
     kind: Annotated[Literal["constant", "variable", "face", "full_round"], Field(description=(
-        "constant: one radius on edges; variable: radius changing along one edge from radii[0] at its start to radii[1] at its end; "
+        "constant: one radius on edges; variable: radius changing along one edge from radii[0] at its start to radii[1] at its end, "
+        "or along a chain of connected edges with vertex_radii; "
         "face: blend between two face sets (faces and faces2) that need not share an edge; full_round: replace the centre face "
         "with a full round between two side faces (rib and boss ends)."))] = "constant",
     radii: Annotated[list[float] | None, Field(description="Variable fillet: [radius at start, radius at end] in mm (list_edges gives the edge's start and end).")] = None,
+    vertex_radii: Annotated[list[dict[str, Any]] | None, Field(description=(
+        "Variable fillet along a chain of edges: the radius at every vertex of the chain, [{vertex: [x, y, z], radius: mm}] "
+        "(the blend varies smoothly between them; fairings, transitions, cast blends).") )] = None,
     faces2: Annotated[list[str] | None, Field(description="Face fillet: the second face set.")] = None,
     distance2: Annotated[float | None, Field(description="Constant: makes an asymmetric fillet with legs radius and distance2 (mm).")] = None,
     conic_rho: Annotated[float | None, Field(gt=0, lt=1, description="Constant: conic profile with this rho instead of a circular arc (0.5 is a parabola, below is flatter, above is fuller).")] = None,
@@ -404,11 +408,37 @@ def fillet(
     before = _volume(doc)
     doc.ClearSelection2(True)
     radii_arr = None
+    chain_verts: list[tuple[list[float], Any, float]] = []
     if kind == "variable":
-        if not edges or len(edges) != 1 or not radii or len(radii) != 2 or min(radii) <= 0:
-            raise SwError("A variable fillet needs one edge and radii=[start, end], both above 0.")
-        g.select(doc, edges[0])
-        radius, ftyp, radii_arr = radii[0], C.swFeatureFilletType_VariableRadius, _doubles([mm(radii[0]), mm(radii[1])])
+        if vertex_radii:
+            if not edges:
+                raise SwError("A variable fillet needs its edges.")
+            edge_objs = _edges_from(doc, edges, None)
+            verts: list[tuple[list[float], Any]] = []
+            for e in edge_objs:
+                for v in (SW.cast(e, "IEdge").GetStartVertex(), SW.cast(e, "IEdge").GetEndVertex()):
+                    if v is not None:
+                        pt = list(SW.cast(v, "IVertex").GetPoint())[:3]
+                        if all(math.dist(pt, q) > 1e-7 for q, _ in verts):
+                            verts.append((pt, v))
+            for pt, v in verts:  # every vertex of the chain needs its radius
+                got = [vr for vr in vertex_radii if math.dist([mm(c) for c in vr.get("vertex", [])] or [1e9] * 3, pt) < mm(0.05)]
+                if not got:
+                    raise SwError(f"vertex_radii has no radius for the chain vertex at {[round(to_mm(c), 3) for c in pt]}; "
+                                  f"the chain's vertices are {[[round(to_mm(c), 3) for c in q] for q, _ in verts]}.")
+                r = float(got[0].get("radius", 0))
+                if r <= 0:
+                    raise SwError("Every vertex radius must be above 0.")
+                chain_verts.append((pt, v, r))
+            for e in edge_objs:
+                SW.cast(e, "IEntity").Select4(True, None)
+            radius = chain_verts[0][2]
+            ftyp, radii_arr = C.swFeatureFilletType_VariableRadius, _doubles([mm(radius)] * len(chain_verts))
+        else:
+            if not edges or len(edges) != 1 or not radii or len(radii) != 2 or min(radii) <= 0:
+                raise SwError("A variable fillet needs one edge and radii=[start, end], both above 0, or edges with vertex_radii.")
+            g.select(doc, edges[0])
+            radius, ftyp, radii_arr = radii[0], C.swFeatureFilletType_VariableRadius, _doubles([mm(radii[0]), mm(radii[1])])
     elif kind == "face":
         a, b = face_objs(faces, "faces"), face_objs(faces2, "faces2")
         if not a or not b or radius <= 0:
@@ -429,6 +459,30 @@ def fillet(
     f = fm.FeatureFillet3(opts, mm(radius), 0.0, 0.0, ftyp, C.swFilletOverFlowType_Default, 0, radii_arr, None, None, None, None, None, None)
     what = f"{kind.replace('_', ' ')} fillet"
     out = result(doc, f, what, "The radius may be too large for the adjacent faces.")
+    if chain_verts:  # SolidWorks orders the radii its own way: set each vertex's radius on the feature itself
+        feat = SW.cast(g.feature_by_name(doc, out["feature"]), "IFeature")
+        data = SW.cast(feat.GetDefinition(), "IVariableFilletFeatureData2")
+        data.AccessSelections(doc, None)
+        own = []  # the feature's own vertex objects, matched to the given ones by position
+        for i in range(len(edges or [])):
+            e = SW.cast(data.GetFilletEdgeAtIndex(i), "IEdge")
+            for v in (e.GetStartVertex(), e.GetEndVertex()) if e is not None else ():
+                if v is not None:
+                    own.append((list(SW.cast(v, "IVertex").GetPoint())[:3], v))
+        chain_verts = [(pt, min(own, key=lambda o: math.dist(o[0], pt))[1] if own else v, r) for pt, v, r in chain_verts]
+        for _, v, r in chain_verts:
+            data.SetRadius(v, mm(r))
+        if not feat.ModifyDefinition(data, doc, None):
+            raise SwError("SolidWorks rejected the vertex radii; a radius may be too large for the faces there.")
+        doc.EditRebuild3()
+        data = SW.cast(feat.GetDefinition(), "IVariableFilletFeatureData2")
+        data.AccessSelections(doc, None)
+        got = [round(to_mm(data.GetRadius(v)), 4) for _, v, _ in chain_verts]
+        data.ReleaseSelectionAccess()
+        if any(abs(a - r) > 1e-3 for a, (_, _, r) in zip(got, chain_verts)):
+            raise SwError(f"The vertex radii came out as {got}, not as given.")
+        out = result(doc, feat, what)
+        out["vertex_radii"] = [{"vertex": [round(to_mm(c), 3) for c in pt], "radius": r} for pt, _, r in chain_verts]
     if before is not None and out.get("volume_mm3") == before:
         raise SwError(f"The {what} did not change the part; check the faces (sides and centre for a full round) and the radius.")
     return out

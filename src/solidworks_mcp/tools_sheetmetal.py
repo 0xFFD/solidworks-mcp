@@ -445,6 +445,18 @@ def closed_corner(
     return out
 
 
+def _outward(edge: Any, face: Any) -> list[float]:
+    """Unit vector in the face's plane, square to a straight edge of it, pointing away from the face."""
+    a, b = (list(SW.cast(v, "IVertex").GetPoint())[:3] for v in (edge.GetStartVertex(), edge.GetEndVertex()))
+    t = _unit([b[i] - a[i] for i in range(3)])
+    n = _unit(list(face.Normal))
+    s = _unit([t[1] * n[2] - t[2] * n[1], t[2] * n[0] - t[0] * n[2], t[0] * n[1] - t[1] * n[0]])
+    box = list(face.GetBox())
+    centre = [(box[i] + box[i + 3]) / 2 for i in range(3)]
+    mid = [(a[i] + b[i]) / 2 for i in range(3)]
+    return s if sum(s[i] * (mid[i] - centre[i]) for i in range(3)) > 0 else [-v for v in s]
+
+
 def _free_vertex(e0: Any, e1: Any | None) -> list[float]:
     """End point of the first edge of a chain that the second edge does not touch (where the profile goes)."""
     ends = [list(SW.cast(v, "IVertex").GetPoint())[:3] for v in (e0.GetStartVertex(), e0.GetEndVertex())]
@@ -461,9 +473,13 @@ def miter_flange(
     position: Annotated[Literal["material_inside", "material_outside", "bend_outside"], Field(description="Where the flanges sit relative to the edges.")] = "material_inside",
     bend_radius: Annotated[float | None, Field(description="Inside bend radius in mm; default is the part's.")] = None,
     gap: Annotated[float, Field(ge=0, description="Rip gap at the mitred corners, mm.")] = 0.1,
+    lip: Annotated[float | None, Field(description=(
+        "Return lip at the top of the flange, mm: positive turns out away from the part, negative turns in over it "
+        "(Z and C sections, stiffened tray rims). The corner gets the bend radius.") )] = None,
 ) -> dict:
     """Miter flange: one continuous flange along a chain of edges with mitred corners (trays, enclosures,
-    avionics boxes), from a straight profile generated square to the sheet at the free end of the chain."""
+    avionics boxes), from a profile generated square to the sheet at the free end of the chain: straight, or
+    with a return lip."""
     doc = SW.active("part")
     C = SW.C
     _sheet_metal_feature(doc)
@@ -494,10 +510,15 @@ def miter_flange(
         sm.InsertSketch(True)
         sk = SW.cast(sm.ActiveSketch, "ISketch")
         frame = SketchFrame(sk)
-        a, b = frame.to_sketch(p), frame.to_sketch([p[i] + n[i] * mm(length) for i in range(3)])
+        top = [p[i] + n[i] * mm(length) for i in range(3)]
+        a, b = frame.to_sketch(p), frame.to_sketch(top)
         sm.AddToDB = True
         try:
             sm.CreateLine(a[0], a[1], 0, b[0], b[1], 0)
+            if lip:
+                out_dir = _outward(e0, sheet)
+                c = frame.to_sketch([top[i] + out_dir[i] * mm(lip) for i in range(3)])
+                sm.CreateLine(b[0], b[1], 0, c[0], c[1], 0)
         finally:
             sm.AddToDB = False
         name = sketch_name(doc, sk)
@@ -540,10 +561,45 @@ def _forming_tools() -> dict[str, str]:
 
 
 @tool(WRITES)
+def create_forming_tool(
+    stopping_face: Annotated[str, Field(description=(
+        "Face of the active part that sits on the sheet ('face@x,y,z'): the punch is everything standing off it; the "
+        "rest of the part is only a base."))],
+    save_as: Annotated[str, Field(description="Forming tool file to write (.sldftp), for forming_tool(tool_name=...).")],
+    remove_faces: Annotated[list[str] | None, Field(description="Faces of the punch that become openings in the sheet (lances, extruded holes, vents).")] = None,
+) -> dict:
+    """Make a custom forming tool from the active part (model the punch shape on a base block first): stiffening
+    beads, joggled tabs, embossed part markings, connector dimples and pierced forms that the design library does
+    not have. The part gets a form tool feature and is saved as a .sldftp; place it with forming_tool."""
+    doc = SW.active("part")
+    C = SW.C
+    target = app().path(save_as, suffixes=(".sldftp",))
+    stop = g.resolve(doc, stopping_face)
+    if stop.kind != "face" or not SW.cast(stop.obj.GetSurface(), "ISurface").IsPlane():
+        raise SwError(f"{stopping_face} must be a planar face.")
+    doc.ClearSelection2(True)
+    stop.select(doc, mark=0)
+    for r in remove_faces or []:
+        ref = g.resolve(doc, r)
+        if ref.kind != "face":
+            raise SwError(f"{r} is not a face.")
+        ref.select(doc, mark=1)
+    before = _last_feature(doc).Name
+    f = doc.FeatureManager.CreateFormTool2(0.0, 0.0)
+    doc.ClearSelection2(True)
+    if f is None or _last_feature(doc).Name == before:
+        raise SwError("SolidWorks could not make the forming tool; the punch must stand off the stopping face on one side.")
+    ok, err, _ = doc.Extension.SaveAs3(str(target), 0, C.swSaveAsOptions_Silent | C.swSaveAsOptions_Copy, None, None, 0, 0)
+    if not ok or not target.exists():
+        raise SwError(f"SolidWorks could not save {target.name} (code {err}).")
+    return {"feature": SW.cast(f, "IFeature").Name, "file": str(target), "removed_faces": len(remove_faces or [])}
+
+
+@tool(WRITES)
 def forming_tool(
     tool_name: Annotated[str, Field(description=(
         "Forming tool from the SolidWorks design library by name ('dimple', 'louver', 'extruded hole', 'round flange', "
-        "'single rib', 'circular emboss', 'counter sink emboss', 'bridge lance', ...) or a .sldftp file."))],
+        "'single rib', 'circular emboss', 'counter sink emboss', 'bridge lance', ...) or a .sldftp file (create_forming_tool makes them)."))],
     position: Annotated[list[float], Field(min_length=3, max_length=3, description="Where on the sheet face it goes, model mm [x, y, z].")],
     angle: Annotated[float, Field(description="Rotation about the face normal, degrees (louvres, ribs, lances).")] = 0.0,
     flip: Annotated[bool, Field(description="Form towards the other side of the sheet.")] = False,
