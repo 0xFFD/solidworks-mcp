@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `release` releases a part or assembly and its drawing at a revision without PDM: order and rebuild checks,
+  Revision/ReleaseDate/ApprovedBy stamped, the revision row added, issue files and native snapshots written to
+  `releases/<part number>/<revision>/`, and every file logged with its SHA-256 checksum.
 - Non-linear tolerance stacks: `tolerance_stack(expression=...)` takes the result as a formula of named
   contributors (linkages, angles, radii), derives each sensitivity from it and adds a Monte Carlo run (spread,
   0.135/99.865 % points, fraction inside the requirement). The formula is checked so it cannot run code.

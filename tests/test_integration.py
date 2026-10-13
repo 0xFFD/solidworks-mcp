@@ -1887,3 +1887,39 @@ def test_engraved_text_on_arc(tmp_path: Path):
             await c.call("close_document")
 
     run(tmp_path, body)
+
+
+def test_release_workflow(tmp_path: Path):
+    """Release A then B of a part and its drawing: stamped, issued, snapshotted and logged with checksums."""
+    import csv
+    import hashlib
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        await c.call("start_sketch", on="plane:Top")
+        await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-40, -25], "corner2": [40, 25]}])
+        await c.call("finish_sketch")
+        await c.call("extrude", depth=10)
+        await c.call("custom_properties", set={"PartNo": "BRK-1001", "Description": "BRACKET"})
+        await c.call("save_document", path="bracket.sldprt")
+        try:
+            await c.call("create_drawing", sheet="A3", sheet_format="iso", save_as="bracket.slddrw")
+            a = await c.call("release", revision="A", description="INITIAL RELEASE", approved_by="QA")
+            assert a["revision_table"] == "created" and a["previous"] is None
+            assert sorted(f["file"] for f in a["files"]) == ["BRK-1001_A.pdf", "BRK-1001_A.step", "bracket.SLDDRW", "bracket.SLDPRT"]
+            assert "already released" in await c.fails("release", revision="A", description="again", approved_by="QA")
+            assert "does not come after" in await c.fails("release", revision="0", description="older", approved_by="QA")
+            b = await c.call("release", revision="B", description="ECO-1042 HOLES ADDED", approved_by="QA")
+            assert b["revision_table"] == "added" and b["history"] == ["A", "B"]
+            folder = Path(b["folder"])
+            for f in b["files"]:  # the logged checksums are those of the issued files
+                assert hashlib.sha256((folder / f["file"]).read_bytes()).hexdigest() == f["sha256"]
+            with open(b["log"], newline="", encoding="utf-8") as fh:
+                assert sorted({r["revision"] for r in csv.DictReader(fh)}) == ["A", "B"]
+            props = (await c.call("custom_properties"))["properties"]
+            assert props["Revision"] == "B" and props["ApprovedBy"] == "QA"
+        finally:
+            await c.call("close_document")
+            await c.call("close_document", name="bracket.SLDPRT")
+
+    run(tmp_path, body)

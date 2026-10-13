@@ -12,6 +12,7 @@ from . import (  # noqa: F401
     tools_features,
     tools_guide,
     tools_inspect,
+    tools_release,
     tools_sheetmetal,
     tools_sketch,
     tools_weldment,
@@ -51,7 +52,7 @@ Typical part workflow:
    bounding_box, check_geometry, measure, tolerance_stack (worst case and RSS clearances; angles or sensitivities for 2D/3D, GD&T zones). Fix with set_dimensions,
    feature_action, undo.
 6. Engineering data: set_material / list_materials, custom_properties (part number, revision,
-   export-control marking), equations, configurations (variants: set_dimensions and feature_action take
+   export-control marking), release (revision, issue files, checksummed release log; no PDM needed), equations, configurations (variants: set_dimensions and feature_action take
    configurations=[...]; configuration_table builds a dash-number family from rows), document_settings (units, ASME or ISO drafting standard),
    add_datum, add_datum_target, add_geometric_tolerance (composite frames, projected zones) and
    add_surface_finish (GD&T on part or assembly component faces, carried into drawings); annotation_views groups them by viewing direction; dimxpert applies a
