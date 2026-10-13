@@ -622,7 +622,7 @@ def _load_model(path: Path) -> None:
     if (res[0] if isinstance(res, tuple) else res) is None:
         raise SwError(load_failure(path))
     if active is not None:
-        SW.app.ActivateDoc3(SW.cast(active, "IModelDoc2").GetTitle(), False, 0, 0)
+        SW.activate(active)
 
 
 def _set_position(view: Any, x: float, y: float) -> None:
@@ -700,6 +700,112 @@ def _fit_views(drw: Any, w: float, h: float) -> str | None:
     return None
 
 
+_STANDARD_SCALES = ((20, 1), (10, 1), (5, 1), (2, 1), (1, 1), (1, 2), (1, 5), (1, 10), (1, 20), (1, 50), (1, 100), (1, 200))  # ISO 5455
+
+
+def _auto_scale(doc: Any, drw: Any, sheet: Any, isometric: bool) -> str | None:
+    """Pick the largest ISO 5455 scale at which the standard views, with room between and around them for
+    dimensions and half the area to spare, fit the drawing area clear of the title block (SolidWorks' own choice is often a size or two
+    small), then lay the views out from the bottom left. Returns the scale chosen, or None to keep SolidWorks'."""
+    vs = [SW.cast(v, "IView") for v in (sheet.GetViews() or [])]
+    if not vs:
+        return None
+    front = next((v for v in vs if (v.GetOrientationName() or "") in ("*Front", "*Back")), vs[0])
+    s0 = front.ScaleDecimal
+    o0 = {v.Name: _outline(v) for v in vs}
+    s1 = s0 * 2
+    sheet.SetScale(s1 if s1 >= 1 else 1, 1 if s1 >= 1 else 1 / s1, True, False)
+    doc.ForceRebuild3(True)
+    o1 = {v.Name: _outline(v) for v in vs}
+
+    def size(v: Any, s: float) -> tuple[float, float]:
+        a, b = o0[v.Name], o1[v.Name]
+        res = []
+        for i in (0, 1):
+            ext = ((b[i + 2] - b[i]) - (a[i + 2] - a[i])) / (s1 - s0)  # model extent; the outline adds a fixed pad
+            res.append((a[i + 2] - a[i]) + ext * (s - s0))
+        return res[0], res[1]
+
+    fx, fy = list(front.Position)[:2]
+    row, col = [], []  # views beside the front view (left/right), and above/below it
+    for v in vs:
+        if v.Name != front.Name:
+            px, py = list(v.Position)[:2]
+            (row if abs(px - fx) >= abs(py - fy) else col).append((v, px > fx if abs(px - fx) >= abs(py - fy) else py > fy))
+    ax0, ay0, ax1, ay1 = _drawing_area(drw)
+    aw, ah = ax1 - ax0, ay1 - ay0
+    tb = _title_block(drw)
+    gap, margin = 0.018, 0.012
+
+    def group(s: float) -> tuple[float, float]:
+        fw, fh = size(front, s)
+        return (fw + sum(size(v, s)[0] + gap for v, _ in row), fh + sum(size(v, s)[1] + gap for v, _ in col))
+
+    def fits(s: float) -> bool:
+        gw, gh = group(s)
+        if gw + 2 * margin > aw or gh + 2 * margin > ah or gw > 0.8 * aw or gh > 0.8 * ah or gw * gh > 0.5 * aw * ah:
+            return False  # half the area is left for sections, details, tables and notes
+        if tb and gw + 2 * margin > tb[0] - ax0 and gh + 2 * margin > ay1 - tb[3]:
+            return False  # neither beside nor above the title block
+        return not isometric or (aw - gw) >= 0.25 * aw or (ah - gh) >= 0.25 * ah
+
+    chosen = next(((n, d) for n, d in _STANDARD_SCALES if fits(n / d)), None)
+    if chosen is None:
+        sheet.SetScale(s0 if s0 >= 1 else 1, 1 if s0 >= 1 else 1 / s0, True, False)
+        doc.ForceRebuild3(True)
+        return None
+    n, d = chosen
+    s = n / d
+    sheet.SetScale(n, d, True, False)
+    doc.ForceRebuild3(True)
+    gw, gh = group(s)
+    fw, fh = size(front, s)
+    left = ax0 + margin + sum(size(v, s)[0] + gap for v, right in row if not right)
+    bottom = ay0 + margin + sum(size(v, s)[1] + gap for v, up in col if not up)
+    if tb and gw + 2 * margin > tb[0] - ax0:  # too wide to sit beside the title block: above it
+        bottom = max(bottom, tb[3] + margin + sum(size(v, s)[1] + gap for v, up in col if not up))
+    _move_outline(front, left=left)
+    _move_outline(front, bottom=bottom)
+    x0, y0, x1, y1 = _outline(front)
+    for v, right in row:
+        _move_outline(v, left=x1 + gap) if right else _move_outline(v, right=x0 - gap)
+    for v, up in col:
+        _move_outline(v, bottom=y1 + gap) if up else _move_outline(v, top=y0 - gap)
+    return f"{n:g}:{d:g}"
+
+
+def _taken_boxes(drw: Any, own: str) -> list[tuple]:
+    """Sheet boxes (metres) a new view must keep clear of: the other views, the title block and the tables."""
+    boxes = [tuple(mm(c) for c in v["outline_mm"]) for v in _views(drw) if v["name"] != own]
+    if tb := _title_block(drw):
+        boxes.append(tb)
+    sv = SW.cast(drw.GetFirstView(), "IView")
+    boxes += [b for t in SW.cast_all(sv.GetTableAnnotations() or [], "ITableAnnotation") if (b := _table_box(t)) is not None]
+    return boxes
+
+
+def _is_clear(view: Any, drw: Any, gap: float = 0.004) -> bool:
+    o = _outline(view)
+    a = _drawing_area(drw)
+    inside = a[0] <= o[0] + 1e-6 and o[2] <= a[2] + 1e-6 and a[1] <= o[1] + 1e-6 and o[3] <= a[3] + 1e-6
+    return inside and not any(_overlap(o, b, gap) for b in _taken_boxes(drw, view.Name))
+
+
+def _place_free(view: Any, drw: Any, goal: tuple[float, float], gap: float = 0.008) -> bool:
+    """Move a view (unaligned if need be) to the free spot inside the border nearest goal; False if there is none."""
+    x0, y0, x1, y1 = _outline(view)
+    spot = _free_box(_drawing_area(drw), x1 - x0, y1 - y0, _taken_boxes(drw, view.Name), goal, gap=gap)
+    if spot is None:
+        return False
+    try:
+        view.RemoveAlignment()
+    except Exception:
+        pass
+    _move_outline(view, left=spot[0])
+    _move_outline(view, top=spot[1])
+    return _is_clear(view, drw, gap / 2)
+
+
 def _fit_top_right(view: Any, w: float, h: float, area: tuple[float, float, float, float] | None = None, margin: float = 0.015) -> None:
     """Move a view into the upper-right corner of the drawing area, halving its scale until it fits."""
     try:
@@ -710,6 +816,12 @@ def _fit_top_right(view: Any, w: float, h: float, area: tuple[float, float, floa
             view.ScaleDecimal = view.ScaleDecimal / 2
         right, top = (area[2] - 0.005, area[3] - 0.01) if area else (w - margin, h - 3 * margin)
         _move_outline(view, right=right, top=top)
+        drw = SW.drawing(SW.active("drawing"))
+        for _ in range(3):  # the corner is taken (a wide side view, a table): the nearest free spot, smaller if need be
+            if _is_clear(view, drw) or _place_free(view, drw, (right, top)):
+                break
+            view.ScaleDecimal = view.ScaleDecimal / 2
+            _move_outline(view, right=right, top=top)
     except Exception:
         pass
 
@@ -726,7 +838,7 @@ def _first_gap(spans: list[tuple[float, float]], start: float, size: float, limi
     return pos if pos + size <= limit else None
 
 
-def _place_beside(view: Any, drw: Any, parent: str, direction: str, gap: float = 0.012) -> None:
+def _place_beside(view: Any, drw: Any, parent: str, direction: str, gap: float = 0.012) -> bool:
     """Put a section view in free space on the sheet, aligned with its parent: in the parent's row for a
     vertical cut (right of the parent, else left), in its column for a horizontal cut (below, else above)."""
     try:
@@ -758,8 +870,14 @@ def _place_beside(view: Any, drw: Any, parent: str, direction: str, gap: float =
                 up = [(o[1], o[3]) for o in others if o[0] < x1 and o[2] > x0]
                 pos = _first_gap(up, par[3] + gap, y1 - y0, ay1, gap)
                 _move_outline(view, bottom=pos) if pos is not None else _move_outline(view, top=min(o[1] for o in others) - gap)
+        if _is_clear(view, drw):
+            return True
+        # no room in line with the parent: the nearest free spot (the view loses its alignment)
+        # aimed at the top-left corner the view would have in line with the parent, so it stays as near aligned as it can
+        goal = (par[0], par[1] - gap) if direction != "vertical" else (par[2] + gap, par[3])
+        return _place_free(view, drw, goal)
     except Exception:
-        pass
+        return False
 
 
 @tool(READ_ONLY)
@@ -778,7 +896,9 @@ def create_drawing(
     sheet: Annotated[str, Field(description="Paper size: A4, A4V, A3, A2, A1, A0, A, AV, B, C, D, E.")] = "A3",
     projection: Annotated[Literal["third", "first"], Field(description="Third angle (ASME, US) or first angle (ISO, Europe).")] = "third",
     isometric: Annotated[bool, Field(description="Add an isometric view.")] = True,
-    scale: Annotated[str | None, Field(description="Sheet scale like '1:2' or '2:1'; default chosen by SolidWorks.")] = None,
+    scale: Annotated[str | None, Field(description=(
+        "Sheet scale like '1:2' or '2:1'; default is the largest standard scale (ISO 5455) at which the views and their "
+        "dimensions fit the sheet."))] = None,
     annotations: Annotated[bool, Field(description="Import model dimensions, datums, GD&T, surface finish, notes and cosmetic threads into the views.")] = True,
     template: Annotated[str | None, Field(description="Drawing template (.drwdot); default is the SolidWorks default.")] = None,
     sheet_format: Annotated[str | None, Field(description=(
@@ -824,10 +944,12 @@ def create_drawing(
     ok = (drw.Create3rdAngleViews2 if projection == "third" else drw.Create1stAngleViews2)(str(mpath))
     if not ok:
         raise SwError(f"SolidWorks could not create views of {mpath.name}.")
-    fit_note = None
+    fit_note = auto = None
     if scale:  # the first views auto-scale the sheet; put the requested scale back and keep the views on the sheet
         sh.SetScale(n, d, True, False)
         doc.ForceRebuild3(True)
+        fit_note = _fit_views(drw, w, h)
+    elif auto := _auto_scale(doc, drw, sh, isometric):
         fit_note = _fit_views(drw, w, h)
     _inherit_settings(doc, mpath)
     if isometric:
@@ -849,6 +971,8 @@ def create_drawing(
     doc.ViewZoomtofit2()
     out: dict[str, Any] = {"drawing": doc.GetTitle(), "model": str(mpath), "projection": projection,
                            "sheet_mm": [round(to_mm(w), 1), round(to_mm(h), 1)], "views": _views(drw)}
+    if scale or auto:
+        out["scale"] = scale or auto
     if tidy and (tidy["gdt_annotations"] or tidy["moved"]):
         out["annotations"] = tidy
     if fmt is not None:
@@ -935,13 +1059,16 @@ def section_view(
     if sv is None:
         raise SwError("SolidWorks could not create the section view (does the line cross the part?).")
     sv = SW.cast(sv, "IView")
-    _place_beside(sv, drw, view, direction, gap=0.03)  # leave room for the parent view's dimensions
+    placed = _place_beside(sv, drw, view, direction, gap=0.03)  # leave room for the parent view's dimensions
     o = [round(to_mm(c), 2) for c in _outline(sv)]
     doc.ForceRebuild3(True)
     hatched = sv.GetFaceHatchCount()
     out = {"section_view": sv.Name, "label": label, "scale": round(sv.ScaleDecimal, 6), "outline_mm": o, "cut_faces": hatched}
     if not hatched:
         out["warning"] = "The cutting line does not pass through material; move it with offset (model mm from the view centre)."
+    elif not placed:
+        out["warning"] = ("There is no clear space for the section view on this sheet; move it with view_dimensions, "
+                          "use a smaller scale, or put it on another sheet.")
     return out
 
 
@@ -1300,9 +1427,9 @@ def _free_box(area: tuple[float, float, float, float], bw: float, bh: float, tak
               gap: float = 0.004, step: float = 0.0025) -> tuple[float, float] | None:
     """Top-left corner (metres) nearest goal for a bw x bh box inside area (x0, y0, x1, y1), clear of the taken boxes."""
     best = None
-    x = area[0]
+    x = area[0] + (goal[0] - area[0]) % step  # the grid runs through the goal, so a spot in line with it is exact
     while x + bw <= area[2] + 1e-9:
-        y = area[1] + bh
+        y = area[1] + bh + (goal[1] - area[1] - bh) % step
         while y <= area[3] + 1e-9:
             if not any(_overlap((x, y - bh, x + bw, y), t, gap) for t in taken):
                 d = math.hypot(x - goal[0], y - goal[1])
@@ -1572,12 +1699,11 @@ def drawing_table(
             model = SW.app.GetOpenDocumentByName(first.GetReferencedModelName()) if first is not None else None
             if model is None:
                 raise SwError("The drawing has no model view to tabulate.")
-            here = doc.GetTitle()
-            SW.app.ActivateDoc3(SW.cast(model, "IModelDoc2").GetTitle(), False, 0, 0)
+            SW.activate(model)
             try:
                 rows = configuration_table(columns=list(dimensions))["configurations"]
             finally:
-                SW.app.ActivateDoc3(here, False, 0, 0)
+                SW.activate(doc)
             if configurations:
                 by_cfg = {r["config"]: r for r in rows}
                 if missing := [c for c in configurations if c not in by_cfg]:

@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `create_drawing` without a scale picks the largest standard scale (ISO 5455) at which the standard views, with
+  room for dimensions and half the area to spare (sections, tables, notes), fit inside the border and
+  clear of the title block, and lays them out (SolidWorks' own choice is often a size or two small: a 300 mm part on
+  A3 came out at 1:5, now 1:2). The scale used is reported.
 - `equations(set={name: expression})` changes an equation or global variable by name (or adds it; an empty
   expression deletes it), and equations that name a variable that no longer exists are flagged (they evaluate to 0).
 - `list_materials` search understands everyday names: 'carbon fibre' finds the CFRP laminates, 'kevlar' aramid,
@@ -181,6 +185,14 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- A section view with no room in line with its parent was put off the sheet, and the isometric view could land on a
+  wide side view; both now go to the nearest clear space inside the border (in line with the parent where it can),
+  and `section_view` warns when the sheet has none.
+- Two open files with the same name (in different folders) were told apart by title only, so a tool could act on
+  the wrong one (a drawing of the other part); documents are now activated and closed by path, a name that matches
+  both is refused, and `open_document` explains a name clash instead of returning error 65536.
+- `insert_component` left every inserted part open in its own window after the assembly was closed, so parts piled
+  up and a later file with the same name could not be loaded; the window is closed once the part is in the assembly.
 - `feature_action(suppress)` on an assembly component reported success and changed nothing; components are now
   suppressed (or unsuppressed) in each requested configuration, checked, with the active one restored.
 - Engraved text with a font that is not installed was drawn in a substitute font without notice; the font is now

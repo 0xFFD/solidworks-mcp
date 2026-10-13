@@ -59,6 +59,9 @@ def find_doc(name: str):
         lambda d: bool(d.GetPathName()) and Path(d.GetPathName()).name.lower() == key,
     ):
         hits = [d for d in docs if test(d)]
+        if len({(d.GetPathName() or d.GetTitle()).lower() for d in hits}) > 1:
+            raise SwError(f"'{name}' matches several open files ({', '.join(d.GetPathName() or d.GetTitle() for d in hits)}); "
+                          "give the full path.")
         if hits:
             return hits[0]
     hits = [d for d in docs if Path(d.GetPathName() or d.GetTitle()).stem.lower() == Path(key).stem]
@@ -193,12 +196,22 @@ def open_document(
     p = a.path(path, must_exist=True, suffixes=tuple(NATIVE))
     C = SW.C
     opts = C.swOpenDocOptions_Silent | (C.swOpenDocOptions_ReadOnly if read_only else 0)
-    res = SW.app.OpenDoc6(str(p), NATIVE[p.suffix.lower()], opts, "", 0, 0)
-    doc, err, warn = (res if isinstance(res, tuple) else (res, 0, 0))
+    open_docs = SW.cast_all(SW.app.GetDocuments() or [], "IModelDoc2")
+    same = next((d for d in open_docs if d.GetPathName() and Path(d.GetPathName()).resolve() == p.resolve()), None)
+    if same is not None:  # already open (perhaps hidden, as a drawing's or assembly's reference): show it
+        doc, err, warn = same, 0, 0
+        doc.Visible = True
+    else:
+        res = SW.app.OpenDoc6(str(p), NATIVE[p.suffix.lower()], opts, "", 0, 0)
+        doc, err, warn = (res if isinstance(res, tuple) else (res, 0, 0))
     if doc is None:
+        clash = next((d.GetPathName() for d in open_docs if d.GetPathName() and Path(d.GetPathName()).name.lower() == p.name.lower()), None)
+        if clash:
+            raise SwError(f"Another file named {p.name} is open ({clash}); SolidWorks opens one file per name. "
+                          "Close it first (close_document).")
         raise SwError(f"SolidWorks could not open {p} (error code {err}).")
     doc = SW.cast(doc, "IModelDoc2")
-    SW.app.ActivateDoc3(doc.GetTitle(), False, 0, 0)
+    SW.activate(doc)
     out = doc_summary(doc)
     if warn:
         out["warnings_code"] = warn
@@ -235,7 +248,7 @@ def import_file(
     doc = SW.cast(doc, "IModelDoc2")
     if not doc.Visible:  # Parasolid imports open without a window, so later tools would find no active document
         doc.Visible = True
-    SW.app.ActivateDoc3(doc.GetTitle(), False, 0, 0)
+    SW.activate(doc)
     out = doc_summary(doc)
     if doc_kind(doc) == "part":
         out["solid_bodies"] = len(SW.part(doc).GetBodies2(0, True) or [])
@@ -253,7 +266,7 @@ def import_file(
 def activate_document(name: Annotated[str, Field(description="Title or path of an open document.")]) -> dict:
     """Make an open document the active one."""
     d = find_doc(name)
-    SW.app.ActivateDoc3(d.GetTitle(), False, 0, 0)
+    SW.activate(d)
     return doc_summary(d)
 
 
@@ -402,7 +415,7 @@ def close_document(
         ok, err, _ = doc.Save3(SW.C.swSaveAsOptions_Silent, 0, 0)
         if not ok:
             raise SwError(f"Save failed: {_save_errors(err)}")
-    SW.app.CloseDoc(title)
+    SW.app.CloseDoc(doc.GetPathName() or title)  # by path: two open files can share a title
     return {"closed": title, "discarded_changes": discarded}
 
 

@@ -171,7 +171,7 @@ def release(
     out: dict[str, Any] = {"part_no": part_no, "revision": rev, "previous": released[-1] if released else None, "date": date}
 
     def activate(doc: Any) -> None:
-        sw.ActivateDoc3(doc.GetTitle(), False, 0, 0)
+        SW.activate(doc)
 
     try:
         activate(model)

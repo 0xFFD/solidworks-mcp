@@ -195,8 +195,8 @@ def test_airframe_features(tmp_path: Path):
             assert bom["parts"] == 2 and bom["total_mass_g"] > 0
             await c.call("save_document", path="assy.sldasm")
             await c.call("close_document", name="assy.SLDASM")
-            await c.call("close_document", name="pod.SLDPRT")
-            await c.call("close_document", name="plate.SLDPRT")
+            await c.call("close_document", name="pod.SLDPRT")  # plate was only inserted: released with the assembly
+            assert "No open document" in await c.fails("close_document", name="plate.SLDPRT")
         except BaseException:
             await c.call("sw_info")
             raise
@@ -461,8 +461,7 @@ def test_drawing_details(tmp_path: Path):
             await c.call("insert_component", path="cover.sldprt", position=[0, 40, 0])
             await c.call("save_document", path="assy.sldasm")
             await c.call("close_document", name="assy.SLDASM")
-            await c.call("close_document", name="cover.SLDPRT")
-            await c.call("close_document", name="block.SLDPRT")
+            await c.call("close_document", name="cover.SLDPRT")  # block was only inserted: released with the assembly
 
             # a drawing of a model that is not open
             drw = await c.call("create_drawing", model="block.sldprt", isometric=False, save_as="block.slddrw")
@@ -1604,6 +1603,8 @@ def test_sheet_format_and_table_placement(tmp_path: Path):
             assert area[0] <= o[0] and o[2] <= area[2] and area[1] <= o[1] and o[3] <= area[3], (o, area)
             assert o[2] <= tb[0] or tb[2] <= o[0] or o[3] <= tb[1] or tb[3] <= o[1], (o, tb)
             d["views"] = (await c.call("drawing_views"))["views"]
+            outlines = [v["outline_mm"] for v in d["views"]]
+            assert all(clear(a, b) for i, a in enumerate(outlines) for b in outlines[i + 1:]), outlines  # isometric and section too
             assert tb[0] > 200 and tb[1] < 30 and tb[2] <= 420 and tb[3] < 120  # bottom right of the A3 sheet
             boxes = [v["outline_mm"] for v in d["views"]] + [tb]
             for kw in ({"kind": "general", "cells": [["A", "B"]] + [[str(i), "x" * 12] for i in range(12)]},
@@ -2284,5 +2285,51 @@ def test_assembly_configuration_suppresses_component(tmp_path: Path):
             assert [line["qty"] for line in (await c.call("bom"))["lines"]] == [3]  # the other configuration keeps it
         finally:
             await c.call("close_document")
+
+    run(tmp_path, body)
+
+
+def test_drawing_scale_and_same_named_files(tmp_path: Path):
+    """A 300 mm lug on A3 is drawn at 1:2 (SolidWorks picks 1:5), inside the border and clear of the title block;
+    a second file with the same name is refused by name, and the drawing is of the file asked for."""
+
+    async def body(c: Session):
+        for folder, size in (("a", [300, 40]), ("b", [20, 20])):
+            (tmp_path / folder).mkdir()
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [0, 0], "corner2": size}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=10)
+            await c.call("save_document", path=f"{folder}/rib_web.sldprt")
+            await c.call("close_document")
+        await c.call("open_document", path="a/rib_web.sldprt")
+        try:
+            assert Path((await c.call("open_document", path="a/rib_web.sldprt"))["path"]).parent.name == "a"  # already open: reused
+            err = await c.fails("open_document", path="b/rib_web.sldprt")
+            assert "another file named rib_web.sldprt is open" in err.lower() and str(tmp_path / "a").lower() in err.lower()
+            d = await c.call("create_drawing", sheet="A3", sheet_format="iso")
+            assert Path(d["model"]).parent.name == "a"
+            assert d["scale"] == "1:2" and d["views"][0]["scale"] == 0.5
+            ax0, ay0, ax1, ay1 = d["drawing_area_mm"]
+            tb = d["title_block_mm"]
+            for v in d["views"]:
+                x0, y0, x1, y1 = v["outline_mm"]
+                assert ax0 <= x0 and x1 <= ax1 and ay0 <= y0 and y1 <= ay1, v
+                assert x1 <= tb[0] or x0 >= tb[2] or y1 <= tb[1] or y0 >= tb[3], v  # clear of the title block
+            for a in d["views"]:  # and of each other
+                for b in d["views"]:
+                    if a is not b:
+                        p, q = a["outline_mm"], b["outline_mm"]
+                        assert p[2] <= q[0] or q[2] <= p[0] or p[3] <= q[1] or q[3] <= p[1], (a["name"], b["name"])
+            await c.call("close_document")
+            small = await c.call("create_drawing", model="a/rib_web.sldprt", sheet="A4", isometric=False)
+            assert small["scale"] == "1:2"  # 300 mm across A4 landscape (no format: 12 mm margins)
+            await c.call("close_document")
+            full = await c.call("create_drawing", model="a/rib_web.sldprt", sheet="A3", scale="1:1", isometric=False)
+            assert full["scale"] == "1:1" and "warning" not in full  # asked for: fits, with less room to spare
+            await c.call("close_document")
+        finally:
+            await c.call("close_document", name=str(tmp_path / "a" / "rib_web.sldprt"))
 
     run(tmp_path, body)

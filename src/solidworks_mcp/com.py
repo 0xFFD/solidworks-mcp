@@ -199,6 +199,11 @@ class SolidWorks:
             raise SwError(f"The active document '{doc.GetTitle()}' is a {doc_kind(doc)}, but this tool needs a {kind}.")
         return doc
 
+    def activate(self, doc: Any) -> None:
+        """Make a document active by its path (two open files can share a title), or by title while unsaved."""
+        doc = self.cast(doc, "IModelDoc2")
+        self.app.ActivateDoc3(doc.GetPathName() or doc.GetTitle(), False, 0, 0)
+
     def part(self, doc: Any) -> Any:
         return self.cast(doc, "IPartDoc")
 

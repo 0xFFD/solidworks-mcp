@@ -53,15 +53,19 @@ def insert_component(
     asm = SW.assembly(doc)
     p = a.path(path, must_exist=True, suffixes=(".sldprt", ".sldasm"))
     C = SW.C
-    title = doc.GetTitle()
     # the referenced document has to be loaded before AddComponent5
+    was_open = any(d.GetPathName() and Path(d.GetPathName()).resolve() == p.resolve()
+                   for d in SW.cast_all(SW.app.GetDocuments() or [], "IModelDoc2"))
     res = SW.app.OpenDoc6(str(p), NATIVE[p.suffix.lower()], C.swOpenDocOptions_Silent, "", 0, 0)
     loaded = res[0] if isinstance(res, tuple) else res
     if loaded is None:
         raise SwError(load_failure(p))
-    SW.app.ActivateDoc3(title, False, 0, 0)
+    SW.activate(doc)
     x, y, z = (mm(v) for v in (list(position) + [0, 0, 0])[:3])
     comp = asm.AddComponent5(str(p), C.swAddComponentConfigOptions_CurrentSelectedConfig, "", False, "", x, y, z)
+    if not was_open:  # close the window opened for the insert: the assembly holds the part, and releases it on close
+        SW.app.CloseDoc(str(p))
+        SW.activate(doc)
     if comp is None:
         raise SwError(f"SolidWorks could not insert {p.name}.")
     comp = SW.cast(comp, "IComponent2")

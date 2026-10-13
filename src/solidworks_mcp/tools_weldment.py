@@ -109,9 +109,9 @@ def _profile_file(shape: str, size: list[float]) -> Path:
         if not ok or not path.exists():
             raise SwError(f"SolidWorks could not save the profile {path.name} (code {err}).")
     finally:
-        sw.CloseDoc(pdoc.GetTitle())
+        sw.CloseDoc(pdoc.GetPathName() or pdoc.GetTitle())
         if active is not None:
-            sw.ActivateDoc3(SW.cast(active, "IModelDoc2").GetTitle(), False, 0, 0)
+            SW.activate(active)
     return path
 
 
