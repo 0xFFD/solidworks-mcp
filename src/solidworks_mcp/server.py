@@ -40,7 +40,7 @@ Typical part workflow:
    positions), draft, linear_pattern, circular_pattern, driven_pattern (table/sketch/curve), mirror, ref_plane, ref_axis, cosmetic_thread,
    helix (springs, modelled threads). Multibody: list_bodies, combine, move_body, split_body, delete_body,
    surface (surface bodies as split tools), knit_surfaces (into a solid when closed), thicken (skins), fill_surface, trim_surface, mould_split (core/cavity
-   blocks for layup tools and moulds), delete_faces and move_faces (direct
+   blocks for layup tools and moulds, flat or along a parting surface), delete_faces and move_faces (direct
    editing, e.g. defeaturing imported STEP parts), 'body:Name' references.
    edit_feature changes an existing feature's end condition, depth, radius, thickness or pattern count, and re-bases reference planes and axes.
    Sheet metal: sheet_metal_base (closed outline or open profile), edge_flange, miter_flange, jog (joggles), hem, forming_tool (dimples, flanged holes, louvres, ribs), create_forming_tool (custom punches), sketched_bend, closed_corner, convert_to_sheet_metal, flat_pattern (blank size,

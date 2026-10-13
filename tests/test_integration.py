@@ -1796,3 +1796,34 @@ def test_drawing_gdt_shown_once_and_clear(tmp_path: Path):
             await c.call("close_document", name="datum_plate.SLDPRT")
 
     run(tmp_path, body)
+
+
+def test_mould_split_stepped_parting(tmp_path: Path):
+    """Mould halves split along a stepped parting surface, checked against hand-computed volumes."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-30, -20], "corner2": [30, 20]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=20)
+            await c.call("move_body", bodies=["body:Boss-Extrude1"], translate=[0, -10, 0])  # 60 x 20 x 40 part centred on Top
+            await c.call("start_sketch", on="plane:Front")
+            await c.call("sketch", entities=[{"type": "polyline", "points": [[-80, 0], [0, 0], [0, 5], [80, 5]]}])
+            await c.call("finish_sketch")
+            await c.call("surface", kind="extrude", depth=100)
+            await c.call("move_body", bodies=["body:Surface-Extrude1"], translate=[0, 0, -50])
+            bodies = await c.call("list_bodies")
+            part, srf = bodies["bodies"][0]["name"], bodies["surfaces"][0]["name"]
+            assert "not a surface body" in await c.fails("mould_split", parting_plane="plane:Top", parting_surface=f"body:{part}", part=f"body:{part}")
+            assert len((await c.call("list_bodies"))["bodies"]) == 1  # nothing built
+            out = await c.call("mould_split", parting_plane="plane:Top", parting_surface=f"body:{srf}", part=f"body:{part}")
+            # block 100 x 80 x 60; parting at y = 0 for x < 0 and y = 5 for x > 0
+            assert out["block_mm3"] == pytest.approx(480000)
+            assert out["cavity"]["volume_mm3"] == pytest.approx(120000 + 100000 - 12000 - 6000)
+            assert out["core"]["volume_mm3"] == pytest.approx(480000 - 48000 - 202000)
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)

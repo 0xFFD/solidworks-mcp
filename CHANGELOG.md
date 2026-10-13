@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `mould_split(parting_surface=...)` splits the mould halves along a stepped or curved parting surface (a surface
+  body through the part's parting line) instead of the flat plane.
 - `dimxpert(action='set_tolerance')` changes the plus/minus tolerance of DimXpert size and location annotations
   one by one, checked against what DimXpert then reports.
 - `create_forming_tool` makes a forming tool (.sldftp) from a modelled punch with its stopping face and optional

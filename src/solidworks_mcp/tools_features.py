@@ -1677,6 +1677,45 @@ def trim_surface(
     return out
 
 
+def _split_by_surface(doc: Any, up: str, down: str, surface_ref: str, frame: Any) -> tuple[str, str]:
+    """Join the two blocks, copy the result, and cut each copy with the parting surface so one keeps each side.
+    Returns (cavity body, core body): the cavity is the piece on the parting plane's normal side."""
+    C = SW.C
+    srf = g.resolve(doc, surface_ref if surface_ref.startswith("body:") else f"body:{surface_ref}").obj
+    if SW.cast(srf, "IBody2").GetType() != C.swSheetBody:
+        raise SwError(f"{surface_ref} is not a surface body.")
+    srf_name = SW.cast(srf, "IBody2").Name
+    whole = combine(operation="add", main=f"body:{up}", tools=[f"body:{down}"])["feature"]
+    before = {x.Name for x in g.bodies(doc)}
+    move_body(bodies=[f"body:{whole}"], copy=True)
+    other = [x.Name for x in g.bodies(doc) if x.Name not in before]
+    if len(other) != 1:
+        raise SwError("Could not copy the mould block.")
+    pieces = []
+    for name, flip in ((whole, False), (other[0], True)):
+        doc.ClearSelection2(True)
+        sm = SW.cast(doc.SelectionManager, "ISelectionMgr")
+        data = SW.cast(sm.CreateSelectData(), "ISelectData")
+        data.Mark = 0
+        SW.cast(g.resolve(doc, f"body:{srf_name}").obj, "IBody2").Select2(False, data)  # the surface body itself, not its faces
+        before = {x.Name for x in g.bodies(doc)}
+        res = doc.FeatureManager.InsertCutSurface(flip, 0, True, False, _dispatch_array([g.resolve(doc, f"body:{name}").obj]))
+        doc.ClearSelection2(True)
+        if (res[0] if isinstance(res, tuple) else res) is None:
+            raise SwError("The parting surface does not cut the mould block in two; it must run right across the block (it may need extending).")
+        new = [x for x in g.bodies(doc) if x.Name not in before and x.Name != name] or [x for x in g.bodies(doc) if x.Name not in before]
+        if len(new) != 1:
+            raise SwError("The parting surface cut a block into more than two pieces; it must run right across it once.")
+        pieces.append(new[0])
+
+    def height(b: Any) -> float:  # centroid along the parting plane's normal
+        c = list(SW.cast(b, "IBody2").GetMassProperties(1.0))[:3]
+        return frame.to_sketch(c)[2]
+
+    cavity, core = sorted(pieces, key=height, reverse=True)
+    return cavity.Name, core.Name
+
+
 @tool(WRITES)
 def mould_split(
     parting_plane: Annotated[str, Field(description="Plane (or planar face) of a flat parting line, e.g. 'plane:Top'.")],
@@ -1685,10 +1724,14 @@ def mould_split(
     below: Annotated[float, Field(gt=0, description="Block depth on the other side (core), mm.")] = 30.0,
     shrinkage: Annotated[float, Field(ge=0, lt=10, description="Scale the part up by this percentage first (moulding or casting shrinkage).")] = 0.0,
     part: Annotated[str | None, Field(description="The part body ('body:Name'); default the only solid body.")] = None,
+    parting_surface: Annotated[str | None, Field(description=(
+        "For a stepped or curved parting line: a surface body ('body:Name', e.g. from surface() or knit_surfaces) that runs "
+        "through the part along its parting line and right across the mould block; the halves split along it instead "
+        "of the plane, which then only sets the block's orientation and extent."))] = None,
 ) -> dict:
-    """Mould or layup tool halves for a part with a flat parting line: a cavity block on one side of the parting
-    plane and a core block on the other, each with the part's shape cut out (composite layup tools, cast and
-    moulded parts). The part is left as it is (scaled by the shrinkage, if any)."""
+    """Mould or layup tool halves: a cavity block on one side of the parting line and a core block on the other,
+    each with the part's shape cut out (composite layup tools, cast and moulded parts). The parting line is flat
+    (the parting plane) or follows a parting surface. The part is left as it is (scaled by the shrinkage, if any)."""
     from .tools_sketch import SketchFrame, finish_sketch, sketch, start_sketch
 
     doc = SW.active("part")
@@ -1697,6 +1740,10 @@ def mould_split(
     body = g.resolve(doc, part if part and part.startswith("body:") else f"body:{part}").obj if part else (solids[0] if len(solids) == 1 else None)
     if body is None:
         raise SwError("The part has several bodies; name the one to mould with part='body:Name'.")
+    if parting_surface:  # check before anything is built
+        srf = g.resolve(doc, parting_surface if parting_surface.startswith("body:") else f"body:{parting_surface}").obj
+        if SW.cast(srf, "IBody2").GetType() != C.swSheetBody:
+            raise SwError(f"{parting_surface} is not a surface body.")
     if shrinkage:
         k = 1 + shrinkage / 100
         if doc.FeatureManager.InsertScale(C.swScaleAboutCentroid, True, k, k, k) is None:
@@ -1725,6 +1772,8 @@ def mould_split(
         raise SwError("Could not build the two mould blocks.")
     up_name, down_name = up[0].Name, down[0].Name
     block = sum(x.GetMassProperties(1.0)[3] for x in (up[0], down[0]))
+    if parting_surface:
+        up_name, down_name = _split_by_surface(doc, up_name, down_name, parting_surface, frame)
     part_vol = g.resolve(doc, f"body:{name}").obj.GetMassProperties(1.0)[3]
     before = {x.Name for x in g.bodies(doc)}
     move_body(bodies=[f"body:{name}"], copy=True, count=2)
