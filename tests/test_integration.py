@@ -915,6 +915,14 @@ def test_weldment_caps_and_gussets(tmp_path: Path):
             assert "shorter than both legs" in await c.fails("gusset", faces=["face@150,20,0", "face@280,75,0"], size=[80, 50], shape="polygon", end_length=60)
             items = (await c.call("cut_list"))["items"]
             assert sum(i["quantity"] for i in items) == 3 + 2 + 2
+            descs = {i.get("description") for i in items}
+            assert {"RECTANGULAR TUBE 40 X 30 X 3", "END CAP 4 THK", "GUSSET 5 THK", "GUSSET 4 THK"} <= descs
+            await c.call("save_document", path="u_frame.sldprt")
+            d = await c.call("create_drawing", sheet="A3", isometric=False)
+            table = await c.call("drawing_table", kind="cut_list", view=d["views"][0]["name"])
+            assert table["rows"][0][:4] == ["ITEM NO.", "QTY.", "DESCRIPTION", "LENGTH"]
+            assert sum(int(r[1]) for r in table["rows"][1:]) == 7 and any(r[2] == "END CAP 4 THK" for r in table["rows"])
+            await c.call("close_document")
         finally:
             await c.call("close_document")
 
@@ -1908,11 +1916,13 @@ def test_release_workflow(tmp_path: Path):
         await c.call("custom_properties", set={"PartNo": "BRK-1001", "Description": "BRACKET"})
         await c.call("save_document", path="bracket.sldprt")
         try:
-            await c.call("create_drawing", sheet="A3", sheet_format="iso", save_as="bracket.slddrw")
+            dwg = await c.call("create_drawing", sheet="A3", sheet_format="iso", save_as="bracket.slddrw")
+            assert dwg["drawing_number_from"] == "PartNo"  # the title block's drawing number is the part number
             a = await c.call("release", revision="A", description="INITIAL RELEASE", approved_by="QA")
             assert a["revision_table"] == "created" and a["previous"] is None
             assert sorted(f["file"] for f in a["files"]) == ["BRK-1001_A.pdf", "BRK-1001_A.step", "bracket.SLDDRW", "bracket.SLDPRT"]
             assert "already released" in await c.fails("release", revision="A", description="again", approved_by="QA")
+            assert "sheet metal" in await c.fails("release", revision="B", description="x", approved_by="QA", exports=["flat_dxf"])
             assert "does not come after" in await c.fails("release", revision="0", description="older", approved_by="QA")
             b = await c.call("release", revision="B", description="ECO-1042 HOLES ADDED", approved_by="QA")
             assert b["revision_table"] == "added" and b["history"] == ["A", "B"]
@@ -1958,5 +1968,78 @@ def test_scaled_views_inside_border(tmp_path: Path):
         finally:
             await c.call("close_document")
             await c.call("close_document", name="slab.SLDPRT")
+
+    run(tmp_path, body)
+
+
+def test_tapped_hole_from_table_name(tmp_path: Path):
+    """fastener='tapped' alone makes a tapped hole (tap drill bore), and a tapped hole refuses a clearance table."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-30, -20], "corner2": [30, 20]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=10)
+            assert "needs a tapped table" in await c.fails("hole", size="M5", kind="tapped", fastener="clearance", positions=[[0, 10, 0]])
+            out = await c.call("hole", size="M5", fastener="tapped", positions=[[0, 10, 0]])
+            assert out["holes"] == 1
+            bores = [f["radius"] for f in (await c.call("list_faces", type="cylinder"))["faces"] if f.get("hole")]
+            assert min(bores) == pytest.approx(2.1, abs=0.01)  # the M5 tap drill is 4.2 mm, not the 5.5 mm clearance
+        finally:
+            await c.call("close_document")
+
+    run(tmp_path, body)
+
+
+def test_bom_shows_part_numbers(tmp_path: Path):
+    """A drawing BOM lists the parts' PartNo property, not their file names."""
+
+    async def body(c: Session):
+        for name, pn, size in (("plate_a", "PLT-100", 60), ("lug_b", "LUG-200", 20)):
+            await c.call("new_document", kind="part")
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-size / 2, -size / 2], "corner2": [size / 2, size / 2]}])
+            await c.call("finish_sketch")
+            await c.call("extrude", depth=5)
+            await c.call("custom_properties", set={"PartNo": pn, "Description": name.upper()})
+            await c.call("save_document", path=f"{name}.sldprt")
+            await c.call("close_document")
+        await c.call("new_document", kind="assembly")
+        await c.call("insert_component", path="plate_a.sldprt", position=[0, 0, 0], fix=True)
+        await c.call("insert_component", path="lug_b.sldprt", position=[0, 5, 0])
+        await c.call("save_document", path="pn_asm.sldasm")
+        try:
+            d = await c.call("create_drawing", sheet="A3", isometric=False)
+            bom = await c.call("drawing_table", kind="bom", view=d["views"][0]["name"], balloons=False)
+            assert bom["part_number_from"] == "PartNo"
+            assert sorted(row[1] for row in bom["rows"][1:]) == ["LUG-200", "PLT-100"]
+            assert bom["rows"][0][1].upper() == "PART NUMBER"
+        finally:
+            await c.call("close_document")
+            await c.call("close_document", name="pn_asm.SLDASM")
+
+    run(tmp_path, body)
+
+
+def test_consumed_sketch_not_reused(tmp_path: Path):
+    """After a failed sketch, a feature does not silently reuse an older sketch that another feature consumed."""
+
+    async def body(c: Session):
+        await c.call("new_document", kind="part")
+        try:
+            await c.call("start_sketch", on="plane:Top")
+            await c.call("sketch", entities=[{"type": "rectangle", "corner1": [-20, -20], "corner2": [20, 20]}])
+            await c.call("finish_sketch")
+            v = (await c.call("extrude", depth=10))["volume_mm3"]
+            await c.call("start_sketch", on="face@0,10,0")
+            await c.fails("sketch", entities=[{"type": "slot", "center1": [0, 0], "center2": [10, 0], "width": 4}])  # wrong keys
+            await c.call("finish_sketch")
+            assert "already used by Boss-Extrude1" in await c.fails("extrude", cut=True, depth=2)
+            assert (await c.call("mass_properties"))["volume_mm3"] == pytest.approx(v)  # nothing was cut
+            assert (await c.call("extrude", sketch="Sketch1", depth=5, reverse=True))["volume_mm3"] == pytest.approx(v * 1.5)
+        finally:
+            await c.call("close_document")
 
     run(tmp_path, body)

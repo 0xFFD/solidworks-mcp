@@ -76,7 +76,17 @@ def created_since(doc: Any, before: str | None, what: str, hint: str = "") -> di
 
 
 def _sketch_ref(doc: Any, sketch: str | None) -> str:
-    return sketch or last_sketch(doc)
+    """The named sketch, or the latest one. The latest is refused when another feature already uses it: a sketch
+    that failed or came out empty leaves an older, consumed sketch as the latest, and building on it is a mistake."""
+    if sketch:
+        return sketch
+    name = last_sketch(doc)
+    f = g.feature_by_name(doc, name)
+    users = [SW.cast(c, "IFeature").Name for c in (f.GetChildren() or [])] if f is not None else []
+    if users:
+        raise SwError(f"The latest sketch, {name}, is already used by {', '.join(users)}. Draw a new sketch first "
+                      f"(the last one may have failed or been empty), or name the sketch to reuse it (sketch='{name}').")
+    return name
 
 
 def _select_sketch(doc: Any, sketch: str | None, mark: int = 0) -> str:
@@ -643,6 +653,10 @@ def hole(
     if any(len(p) != 3 for p in pts):
         raise SwError("Positions are [x, y, z] in model mm.")
     table = _FASTENERS[standard]
+    if fastener in ("tapped", "bottoming_tapped") and kind == "simple":
+        kind = "tapped"  # a tapped table only makes sense for a tapped hole
+    elif kind == "tapped" and fastener and "tapped" not in fastener:
+        raise SwError(f"A tapped hole needs a tapped table (tapped or bottoming_tapped), not '{fastener}'.")
     fname = fastener or _DEFAULT_FASTENER[kind]
     if fname not in table:
         raise SwError(f"Fastener '{fname}' is not available for {standard}. Choose from {sorted(table)}.")

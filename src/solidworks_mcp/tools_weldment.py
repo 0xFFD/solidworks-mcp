@@ -186,6 +186,8 @@ def structural_member(
     out = result(doc, feat, "structural member", "The sketch lines must not overlap and the profile must be a closed sketch.")
     out["members"] = len(g.bodies(doc)) - before
     out["profile"] = str(path)
+    if shape and size:
+        _describe_members(doc, _DESCRIBE[shape].format(*[float(v) for v in size]))
     out["cut_list"] = _cut_list(doc)
     return out
 
@@ -195,6 +197,30 @@ def _number(text: str) -> float | None:
 
     m = re.search(r"-?\d+(?:\.\d+)?", text or "")
     return float(m.group(0)) if m else None
+
+
+_DESCRIBE = {
+    "rect_tube": "RECTANGULAR TUBE {0:g} X {1:g} X {2:g}", "square_tube": "SQUARE TUBE {0:g} X {0:g} X {1:g}",
+    "round_tube": "ROUND TUBE OD {0:g} X {1:g}", "round_bar": "ROUND BAR DIA {0:g}", "flat_bar": "FLAT BAR {0:g} X {1:g}",
+    "angle": "ANGLE {0:g} X {1:g} X {2:g}", "channel": "CHANNEL {0:g} X {1:g} X {2:g}",
+}
+
+
+def _describe_members(doc: Any, description: str, with_length: bool = True) -> None:
+    """Give the cut list items that have no description yet (just made) a description, for the cut list table and
+    the fabrication BOM: members (with a length) get their profile, plates (end caps, gussets: no length) theirs."""
+    _cut_list(doc)  # bring the cut list up to date so the new items exist
+    for f in g.iter_features(doc):
+        sub = SW.cast(f.GetFirstSubFeature(), "IFeature")
+        while sub is not None:
+            if sub.GetTypeName2() == "CutListFolder":
+                cpm = SW.cast(sub.CustomPropertyManager, "ICustomPropertyManager")
+                names = {n.upper(): n for n in cpm.GetNames() or []}
+                desc = cpm.Get6(names["DESCRIPTION"], False)[2] if "DESCRIPTION" in names else ""
+                length = cpm.Get6(names["LENGTH"], False)[2] if "LENGTH" in names else ""
+                if not desc and bool(_number(length)) == with_length:
+                    cpm.Add3("DESCRIPTION", SW.C.swCustomInfoText, description, SW.C.swCustomPropertyReplaceValue)
+            sub = SW.cast(sub.GetNextSubFeature(), "IFeature")
 
 
 def _cut_list(doc: Any) -> list[dict]:
@@ -293,6 +319,7 @@ def end_cap(
     if len(caps) != len(targets):
         out["warning"] = f"{len(targets)} end faces were selected but {len(caps)} caps were made."
     out["caps"] = caps
+    _describe_members(doc, f"END CAP {thickness:g} THK", with_length=False)
     return out
 
 
@@ -329,6 +356,7 @@ def gusset(
         False, 0.0, 0, False, False, False, _dispatch_array(picked))
     out = result(doc, feat, "gusset", "The two faces must be planar faces of different members that meet at a corner, and the legs must fit on them.")
     out["plates"] = _new_bodies(doc, before)
+    _describe_members(doc, f"GUSSET {thickness:g} THK", with_length=False)
     return out
 
 

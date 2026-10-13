@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `drawing_table(kind='cut_list')` puts a weldment cut list (item, quantity, description, length) on the drawing, and
+  structural members, end caps and gussets now describe their cut list items (e.g. 'SQUARE TUBE 40 X 40 X 3',
+  'END CAP 3 THK').
+- `release` issues `flat_dxf` (the sheet metal flat blank with bend lines) alongside the other files.
 - `release` releases a part or assembly and its drawing at a revision without PDM: order and rebuild checks,
   Revision/ReleaseDate/ApprovedBy stamped, the revision row added, issue files and native snapshots written to
   `releases/<part number>/<revision>/`, and every file logged with its SHA-256 checksum.
@@ -171,6 +175,15 @@ All notable changes to this project are documented here. The format follows
   titanium, K-factors, flange and hole-to-bend rules and an avionics tray recipe.
 
 ### Fixed
+- When a sketch failed or came out empty, the next extrude, revolve or other sketch feature silently reused the
+  previous sketch that another feature had already consumed (cutting the part wrongly); the latest sketch is now
+  refused when it is already in use, unless it is named on purpose.
+- The title block's drawing number showed the file name; with a sheet format and a model part number
+  property it now shows the part number (on added sheets too).
+- Drawing BOMs listed file names in the PART NUMBER column; when the parts carry a part number property
+  (PartNo, PartNumber, ...) the column now shows it.
+- `hole(fastener='tapped')` without `kind='tapped'` failed with a misleading size error; a tapped table now makes
+  a tapped hole, and a tapped hole with a clearance table is refused clearly.
 - Section and projected views were placed up to the sheet edge and could cover the title block or tables; they
   now stay inside the format's border and treat the title block and tables as occupied (a projected view that
   must run past the border on its projection line is reported).

@@ -109,8 +109,9 @@ def release(
     description: Annotated[str, Field(min_length=1, description="What changed (the revision block's description), e.g. 'INITIAL RELEASE' or 'ECO-1042: HOLE 2X Ø6.6 WAS Ø6.4'.")],
     approved_by: Annotated[str, Field(min_length=1, description="Who approved the release (initials or name), for the revision block and the log.")],
     drawing: Annotated[str | None, Field(description="The drawing (.slddrw) to release with the model; default the active document if it is a drawing.")] = None,
-    exports: Annotated[list[Literal["step", "pdf", "dxf", "x_t", "stl"]], Field(description=(
-        "Files to issue: step, x_t and stl from the model, pdf and dxf from the drawing."))] = ["step", "pdf"],  # noqa: B006
+    exports: Annotated[list[Literal["step", "pdf", "dxf", "x_t", "stl", "flat_dxf"]], Field(description=(
+        "Files to issue: step, x_t and stl from the model, pdf and dxf from the drawing, flat_dxf (the flat blank with "
+        "bend lines) from a sheet metal part."))] = ["step", "pdf"],  # noqa: B006
     step_ap: Annotated[Literal["auto", "203", "214", "242"], Field(description="STEP protocol for the step export.")] = "auto",
 ) -> dict:
     """Release a part or assembly (and its drawing) at a revision, without a PDM vault: refuses a revision already
@@ -153,6 +154,14 @@ def release(
         raise SwError(f"{part_no} revision {rev} is already released ({', '.join(released)}); release a new revision.")
     if released and _rev_key(rev) <= _rev_key(released[-1]):
         raise SwError(f"Revision {rev} does not come after {part_no}'s last release {released[-1]}.")
+    if "flat_dxf" in exports:  # checked before anything is stamped or saved
+        from .tools_sheetmetal import _sheet_metal_feature
+
+        if doc_kind(model) != "part":
+            raise SwError("A flat_dxf export needs a sheet metal part, not an assembly.")
+        _sheet_metal_feature(model)
+    if ddoc is None and any(k in ("pdf", "dxf") for k in exports):
+        raise SwError("pdf and dxf are made from the drawing; give drawing= (or release from the drawing), or leave them out.")
     errs = _rebuild_errors(model)
     if errs:
         raise SwError(f"{Path(model.GetPathName()).name} has rebuild errors in {', '.join(errs)}; fix them before release.")
@@ -180,6 +189,17 @@ def release(
         folder.mkdir(parents=True, exist_ok=True)
         issued = []
         for kind in exports:
+            if kind == "flat_dxf":
+                from .tools_sheetmetal import flat_pattern
+
+                activate(model)
+                target = folder / f"{safe}_{rev}_FLAT.dxf"
+                try:
+                    flat_pattern(export=str(target))
+                except SwError as err:
+                    raise SwError(f"No flat blank for {part_no}: {err}") from None
+                issued.append(target)
+                continue
             src = model if kind in ("step", "x_t", "stl") else ddoc
             if src is None:
                 raise SwError(f"A {kind} export needs a drawing; give drawing=.")

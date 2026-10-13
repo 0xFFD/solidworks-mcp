@@ -565,6 +565,28 @@ def _drawing_area(drw: Any) -> tuple[float, float, float, float]:
             min(right) - pad if right else x1, min(top) - pad if top else y1)
 
 
+def _link_drawing_number(drw: Any, model: Any) -> str | None:
+    """Point the title block's drawing number (linked to the file name in SolidWorks' formats) at the model's part
+    number property, as drawings are numbered by part number. Returns the property used, or None."""
+    if model is None:
+        return None
+    cpm = SW.cast(SW.cast(model, "IModelDoc2").Extension.CustomPropertyManager(""), "ICustomPropertyManager")
+    names = {n.lower(): n for n in cpm.GetNames() or ()}
+    prop = next((names[k.lower()] for k in _PART_NO_PROPS if k.lower() in names and cpm.Get6(names[k.lower()], False)[2]), None)
+    if prop is None:
+        return None
+    linked = False
+    n = SW.cast(drw.GetFirstView(), "IView").GetFirstNote()
+    while n is not None:
+        n = SW.cast(n, "INote")
+        text = str(n.PropertyLinkedText or "")
+        if '$PRP:"SW-File Name"' in text:
+            n.PropertyLinkedText = text.replace('$PRP:"SW-File Name"', f'$PRPSHEET:"{prop}"')
+            linked = True
+        n = n.GetNext()
+    return prop if linked else None
+
+
 def _title_block(drw: Any) -> tuple[float, float, float, float] | None:
     """Box (metres) around the title block: the format notes that are not zone labels along the border."""
     w, h = _sheet_size(drw)
@@ -828,6 +850,10 @@ def create_drawing(
     if fmt is not None:
         out["sheet_format"] = fmt.name
         out["drawing_area_mm"] = [round(to_mm(c), 1) for c in _drawing_area(drw)]
+        model_doc = SW.app.GetOpenDocumentByName(str(mpath))
+        if prop := _link_drawing_number(drw, model_doc):
+            out["drawing_number_from"] = prop
+            doc.ForceRebuild3(True)
         tb = _title_block(drw)
         if tb:
             out["title_block_mm"] = [round(to_mm(c), 1) for c in tb]
@@ -1230,6 +1256,11 @@ def sheets(
         drw.ActivateSheet(name)
         if fmt is not None:
             _apply_format(doc, drw, fmt, size)
+            model = None
+            for sheet_name in drw.GetSheetNames() or []:  # the drawing's model, from any sheet's views
+                for v in SW.cast(drw.Sheet(sheet_name), "ISheet").GetViews() or []:
+                    model = model or SW.cast(v, "IView").ReferencedDocument
+            _link_drawing_number(drw, model)
     elif action == "activate":
         if name not in names:
             raise SwError(f"No sheet named '{name}'. Sheets: {names}")
@@ -1443,6 +1474,47 @@ def _table_place_result(drw: Any, ta: Any, kind: str, position: list[float] | No
     return {"box_mm": [round(to_mm(c), 1) for c in box]} if box else {}
 
 
+_PART_NO_PROPS = ("PartNo", "PartNumber", "Part Number", "Number")
+
+
+def _bom_part_number_property(asm: Any) -> str | None:
+    """The custom property the assembly's parts keep their part number in, if they have one."""
+    for comp in g.components(asm):
+        m = comp.GetModelDoc2()
+        if m is None:
+            continue
+        cpm = SW.cast(SW.cast(m, "IModelDoc2").Extension.CustomPropertyManager(""), "ICustomPropertyManager")
+        names = {n.lower(): n for n in cpm.GetNames() or ()}
+        for key in _PART_NO_PROPS:
+            if key.lower() in names and cpm.Get6(names[key.lower()], False)[2]:
+                return names[key.lower()]
+    return None
+
+
+def _bom_part_numbers(ta: Any, bt: Any, prop: str) -> None:
+    """Show part numbers from a custom property in the BOM's PART NUMBER column instead of file names. The built-in
+    column cannot change type, so a property column takes its place."""
+    C = SW.C
+    header = [ta.Text2(0, c, True).strip().upper() for c in range(ta.ColumnCount)]
+    col = next((i for i, h in enumerate(header) if "PART" in h and "NUMBER" in h), None)
+    if col is None:
+        return
+    if not ta.InsertColumn2(C.swTableItemInsertPosition_After, col, ta.Text2(0, col, True), C.swInsertColumn_DefaultWidth):
+        return
+    ta.SetColumnType2(col + 1, C.swBomTableColumnType_CustomProperty, False)
+    if bt.SetColumnCustomProperty(col + 1, prop):
+        ta.DeleteColumn2(col, False)
+    else:
+        ta.DeleteColumn2(col + 1, False)
+
+
+def _sub_features(f: Any):
+    sub = SW.cast(f.GetFirstSubFeature(), "IFeature")
+    while sub is not None:
+        yield sub
+        sub = SW.cast(sub.GetNextSubFeature(), "IFeature")
+
+
 def _table_rows(ta: Any, limit: int = 30) -> list[list[str]]:
     return [[ta.Text2(r, c, True) for c in range(ta.ColumnCount)] for r in range(min(ta.RowCount, limit))]
 
@@ -1453,8 +1525,9 @@ _ANCHORS = {"top_left": "swBOMConfigurationAnchor_TopLeft", "top_right": "swBOMC
 
 @tool(WRITES)
 def drawing_table(
-    kind: Annotated[Literal["bom", "revision", "hole", "general"], Field(description=(
+    kind: Annotated[Literal["bom", "revision", "hole", "general", "cut_list"], Field(description=(
         "bom: parts list of an assembly view (with balloons); revision: revision block; hole: hole table of a face seen in a view; "
+        "cut_list: weldment cut list (item, quantity, description, length) of a weldment part's view; "
         "general: a table of given cells, or a tabulated (dash-number) table of the model's configurations."))],
     view: Annotated[str | None, Field(description="bom and hole: the view the table belongs to.")] = None,
     position: Annotated[list[float] | None, Field(description="Table corner [x, y] in sheet mm (the corner given by anchor); default is free space clear of views, other tables and the title block.")] = None,
@@ -1479,7 +1552,7 @@ def drawing_table(
     use_anchor = False
     x, y = (mm(position[0]), mm(position[1])) if position else (0.012, h - 0.012)
     anc = getattr(C, _ANCHORS[anchor if position else "top_left"])
-    if kind in ("bom", "hole") and not view:
+    if kind in ("bom", "hole", "cut_list") and not view:
         raise SwError(f"A {kind} table needs view=.")
     out: dict[str, Any] = {"table": kind}
     if kind == "general":
@@ -1523,12 +1596,26 @@ def drawing_table(
         if t is None:
             raise SwError("SolidWorks could not insert the bill of materials.")
         ta = SW.cast(t, "ITableAnnotation")
+        if prop := _bom_part_number_property(_view_model(v)):
+            out["part_number_from"] = prop
+            _bom_part_numbers(ta, SW.cast(t, "IBomTableAnnotation"), prop)
         if balloons:
             doc.ClearSelection2(True)
             doc.Extension.SelectByID2(view, "DRAWINGVIEW", 0, 0, 0, False, 0, None, 0)
             made = drw.AutoBalloon5(SW.cast(drw.CreateAutoBalloonOptions(), "IAutoBalloonOptions"))
             doc.ClearSelection2(True)
             out["balloons"] = len(made) if made else 0
+    elif kind == "cut_list":
+        v = _view(drw, view)
+        model = _view_model(v)
+        if doc_kind(model) != "part" or not any(sub.GetTypeName2() == "CutListFolder" for feat in g.iter_features(model)
+                                                 for sub in _sub_features(feat)):
+            raise SwError("A cut list table needs a view of a weldment part (structural_member).")
+        tpl = app().path(template, must_exist=True) if template else _table_template("cut list.sldwldtbt")
+        t = v.InsertWeldmentTable(use_anchor, x, y, anc, "", str(tpl))  # "" is the view's own configuration
+        if t is None:
+            raise SwError("SolidWorks could not insert the cut list table.")
+        ta = SW.cast(t, "ITableAnnotation")
     elif kind == "revision":
         sheet = SW.cast(drw.GetCurrentSheet(), "ISheet")
         tpl = app().path(template, must_exist=True) if template else _table_template("standard revision block.sldrevtbt")

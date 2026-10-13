@@ -60,7 +60,7 @@ Typical part workflow:
 7. Output: save_document (native files), export (STEP AP242/AP214/AP203, IGES, Parasolid, STL, 3MF, PDF,
    DXF, DWG, PNG), create_drawing (standard views, model dimensions and GD&T; sheet_format='iso' or 'ansi' adds the border and title block), section_view, add_note;
    detail_view, projected_view, auxiliary_view, broken_view, breakout_section, add_view (incl. flat_pattern), sheets, drawing_dimension, view_dimensions,
-   drawing_table (bom with balloons, revision block, hole table; placed in free space unless given a position).
+   drawing_table (bom with balloons, revision block, hole table, weldment cut list; placed in free space unless given a position).
 Weldments: structural_member (tube, bar, angle, channel along sketch lines; frames, rigs, GSE), trim_members (corner trim/extend), end_cap, gusset, cut_list,
 member_check (hand-calc bending, deflection, buckling and margins of safety of a member; no Simulation needed).
 Assemblies: insert_component (origin at position), add_mate (incl. limit_distance/limit_angle travel stops, width,
